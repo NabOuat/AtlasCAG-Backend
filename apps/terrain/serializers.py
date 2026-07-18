@@ -15,7 +15,7 @@ class PlanningSerializer(serializers.ModelSerializer):
             'type_activite', 'lieu', 'observations',
         ]
 
-    def get_asf_nom(self, obj):
+    def get_asf_nom(self, obj) -> str:
         u = obj.asf
         return f'{u.first_name} {u.last_name}'.strip() or u.username
 

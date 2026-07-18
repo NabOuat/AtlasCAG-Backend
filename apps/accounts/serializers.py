@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
 from .models import Utilisateur
 
 
@@ -17,6 +18,7 @@ class UtilisateurListSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'first_name', 'last_name', 'nom_complet',
                   'email', 'profil', 'is_active', 'is_staff', 'date_joined']
 
+    @extend_schema_field(serializers.CharField())
     def get_nom_complet(self, obj):
         return f'{obj.first_name} {obj.last_name}'.strip() or obj.username
 

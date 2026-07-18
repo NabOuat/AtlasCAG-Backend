@@ -5,6 +5,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
+from drf_spectacular.utils import extend_schema, OpenApiParameter
 
 VALID_ZONES = {'cavally', 'worodougou'}
 VALID_TYPES = {'cf', 'dtv', 'sous_prefecture'}
@@ -235,6 +236,48 @@ def _compute_bounds(features: list[dict]) -> list | None:
 # Views
 # ---------------------------------------------------------------------------
 
+@extend_schema(
+    tags=['Géoportail'],
+    summary='Couche GeoJSON (CF / DTV / sous-préfectures)',
+    description=(
+        'Retourne un **GeoJSON FeatureCollection** pour la couche demandée dans la zone donnée.\n\n'
+        '**Valeurs `zone`** : `cavally`, `worodougou`\n\n'
+        '**Valeurs `layer_type`** :\n'
+        '- `cf` — Certificats fonciers : levé, provisoire, définitif, existant (toutes tables)\n'
+        '- `dtv` — Délimitations territoriales villageoises : délimités, levé, provisoire\n'
+        '- `sous_prefecture` — Limites administratives des sous-préfectures\n\n'
+        '**Propriétés de chaque Feature** : tous les champs attributaires de la table shapefile, '
+        'plus `_statut` (LEVE/PROV/DEF/EXISTANT/DELIMITE), `_schema`, `_source_table`, `_exclude_from_bounds`.\n\n'
+        '**`_meta`** dans la réponse : `zone`, `layer_type`, `tables` interrogées, '
+        '`feature_count`, `bounds` ([[lat_min, lng_min], [lat_max, lng_max]]).\n\n'
+        'Géométries reprojetées en WGS84 (EPSG:4326). Limite : 8 000 features par table.'
+    ),
+    parameters=[
+        OpenApiParameter('zone',       location='path', description='Zone géographique : `cavally` ou `worodougou`'),
+        OpenApiParameter('layer_type', location='path', description='Type de couche : `cf`, `dtv` ou `sous_prefecture`'),
+    ],
+    responses={
+        200: {
+            'type': 'object',
+            'properties': {
+                'type':     {'type': 'string', 'example': 'FeatureCollection'},
+                'features': {'type': 'array', 'items': {'type': 'object'}},
+                '_meta': {
+                    'type': 'object',
+                    'properties': {
+                        'zone':          {'type': 'string'},
+                        'layer_type':    {'type': 'string'},
+                        'tables':        {'type': 'array', 'items': {'type': 'string'}},
+                        'feature_count': {'type': 'integer'},
+                        'bounds':        {'type': 'array', 'nullable': True},
+                    },
+                },
+            },
+        },
+        400: {'description': 'Zone ou type inconnu'},
+        503: {'description': 'Connexion PostGIS impossible'},
+    },
+)
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def geo_layer(_request, zone: str, layer_type: str):
@@ -301,6 +344,43 @@ def geo_layer(_request, zone: str, layer_type: str):
         )
 
 
+@extend_schema(
+    tags=['Géoportail'],
+    summary='Attributs tabulaires CF — onglet attributaire (sans géométrie)',
+    description=(
+        'Retourne les données attributaires des parcelles CF de la zone, **sans géométrie**. '
+        'Utilisé pour l\'onglet tableau du géoportail.\n\n'
+        '**Colonnes retournées** : `NUM_DEMAND`, `NOM_REGION`, `NOM_DEPART`, `NOM_SSPREF`, '
+        '`NOM_VILLAGE`, `NOM_DEMAND`, `SUPERF`, `PERIM`, `NOM_PROJET`, `NOM_OTA`, `STATUT`, `N_DEMCGE`, `_statut`, `_schema`.\n\n'
+        'Toutes les tables CF sont interrogées (levé, provisoire, définitif, existant, publicité, rejeté). '
+        'La réponse inclut `totals_by_statut` pour connaître la répartition par type.\n\n'
+        '**Pagination manuelle** : `page` (défaut 1) et `page_size` (défaut 100, max 500).'
+    ),
+    parameters=[
+        OpenApiParameter('zone',       location='path', description='`cavally` ou `worodougou`'),
+        OpenApiParameter('region',     description='Filtrer par nom de région (insensible à la casse)', required=False),
+        OpenApiParameter('departement',description='Filtrer par nom de département', required=False),
+        OpenApiParameter('sous_pref',  description='Filtrer par nom de sous-préfecture', required=False),
+        OpenApiParameter('village',    description='Filtrer par nom de village', required=False),
+        OpenApiParameter('statut',     description='Filtrer par statut : `LEVE`, `PROV`, `DEF`, `EXISTANT`, `EN_PUBLICITE`, `APRES_PUBLICITE`, `REJETE`', required=False),
+        OpenApiParameter('page',       description='Numéro de page (défaut 1)', required=False, type=int),
+        OpenApiParameter('page_size',  description='Taille de page (défaut 100, max 500)', required=False, type=int),
+    ],
+    responses={
+        200: {
+            'type': 'object',
+            'properties': {
+                'total':            {'type': 'integer'},
+                'page':             {'type': 'integer'},
+                'page_size':        {'type': 'integer'},
+                'totals_by_statut': {'type': 'object', 'description': 'Compteur par statut CF'},
+                'results':          {'type': 'array', 'items': {'type': 'object'}},
+            },
+        },
+        400: {'description': 'Zone inconnue'},
+        503: {'description': 'Connexion PostGIS impossible'},
+    },
+)
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def geo_cf_parcelles(_request, zone: str):
@@ -413,6 +493,39 @@ def geo_cf_parcelles(_request, zone: str):
     })
 
 
+@extend_schema(
+    tags=['Géoportail'],
+    summary='Attributs shapefile par numéro de demande — usage contrôle qualité',
+    description=(
+        'Retourne tous les attributs shapefile d\'une parcelle CF identifiée par son `NUM_DEMAND`, '
+        '**sans géométrie**. Interroge toutes les tables CF de la zone.\n\n'
+        '**Usage** : panneau droit (Shapefile) de la fenêtre de contrôle qualité — '
+        'compare les données DIGIFOR avec les données du shapefile (superficie, OTA, statut…).\n\n'
+        'Chaque enregistrement inclut `_statut`, `_source_table` et `_schema` pour identifier l\'origine.'
+    ),
+    parameters=[
+        OpenApiParameter('zone',       location='path', description='`cavally` ou `worodougou`'),
+        OpenApiParameter('num_demand', description='Numéro de demande DIGIFOR (ex: CF-2024-00123)', required=True),
+    ],
+    responses={
+        200: {
+            'type': 'object',
+            'properties': {
+                'zone':       {'type': 'string'},
+                'num_demand': {'type': 'string'},
+                'records': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'description': 'Tous les champs du shapefile + _statut, _source_table, _schema',
+                    },
+                },
+            },
+        },
+        400: {'description': 'num_demand manquant ou zone inconnue'},
+        503: {'description': 'Connexion PostGIS impossible'},
+    },
+)
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def geo_cf_detail(_request, zone: str):
@@ -460,6 +573,41 @@ def geo_cf_detail(_request, zone: str):
     return Response({'zone': zone, 'num_demand': num_demand, 'records': results})
 
 
+@extend_schema(
+    tags=['Géoportail'],
+    summary='Tables PostGIS disponibles dans la zone',
+    description=(
+        'Retourne la liste de toutes les tables spatiales présentes dans la base PostGIS de la zone '
+        '(via `geometry_columns`). Utilisé pour la découverte et le débogage.\n\n'
+        'Chaque entrée contient : `schema`, `table`, `geom_col`, `type` (POLYGON, MULTIPOLYGON…), `srid`.'
+    ),
+    parameters=[
+        OpenApiParameter('zone', location='path', description='`cavally` ou `worodougou`'),
+    ],
+    responses={
+        200: {
+            'type': 'object',
+            'properties': {
+                'zone': {'type': 'string'},
+                'tables': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'schema':   {'type': 'string'},
+                            'table':    {'type': 'string'},
+                            'geom_col': {'type': 'string'},
+                            'type':     {'type': 'string'},
+                            'srid':     {'type': 'integer'},
+                        },
+                    },
+                },
+            },
+        },
+        400: {'description': 'Zone inconnue'},
+        503: {'description': 'Connexion PostGIS impossible'},
+    },
+)
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def geo_tables(_request, zone: str):

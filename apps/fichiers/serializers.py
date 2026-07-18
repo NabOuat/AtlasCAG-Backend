@@ -16,12 +16,12 @@ class FichierDossierSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['taille', 'televerse_le', 'televerse_par']
 
-    def get_televerse_par_nom(self, obj):
+    def get_televerse_par_nom(self, obj) -> str | None:
         if obj.televerse_par:
             return f'{obj.televerse_par.first_name} {obj.televerse_par.last_name}'.strip()
         return None
 
-    def get_fichier_url(self, obj):
+    def get_fichier_url(self, obj) -> str | None:
         if obj.fichier:
             request = self.context.get('request')
             if request:

@@ -20,15 +20,46 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
+from drf_spectacular.utils import extend_schema
+
+# Annotations JWT — SimpleJWT n'a pas de tags par défaut
+TokenObtainPairView  = extend_schema(
+    tags=['Authentification'],
+    summary='Connexion — obtenir les tokens JWT',
+    description=(
+        'Authentifie un utilisateur et retourne un **access token** (8h) et un **refresh token** (30j).\n\n'
+        '**Corps** : `{ "username": "...", "password": "..." }`\n\n'
+        '**Réponse** : `{ "access": "eyJ...", "refresh": "eyJ..." }`\n\n'
+        'Utiliser le `access` token dans le header de toutes les requêtes suivantes :\n'
+        '`Authorization: Bearer <access_token>`'
+    ),
+)(TokenObtainPairView)
+
+TokenRefreshView = extend_schema(
+    tags=['Authentification'],
+    summary='Rafraîchir le token d\'accès',
+    description=(
+        'Renouvelle le token d\'accès à partir d\'un refresh token valide.\n\n'
+        '**Corps** : `{ "refresh": "eyJ..." }`\n\n'
+        '**Réponse** : `{ "access": "eyJ...", "refresh": "eyJ..." }` '
+        '(le refresh token est roté automatiquement — l\'ancien est blacklisté).'
+    ),
+)(TokenRefreshView)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
 
-    # Auth JWT
+    # ── Documentation OpenAPI ────────────────────────────────────────────────
+    path('api/schema/', SpectacularAPIView.as_view(),                              name='schema'),
+    path('api/docs/',   SpectacularSwaggerView.as_view(url_name='schema'),         name='swagger-ui'),
+    path('api/redoc/',  SpectacularRedocView.as_view(url_name='schema'),           name='redoc'),
+
+    # ── Auth JWT ─────────────────────────────────────────────────────────────
     path('api/token/',         TokenObtainPairView.as_view(),  name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(),     name='token_refresh'),
 
-    # Apps
+    # ── Apps ─────────────────────────────────────────────────────────────────
     path('api/accounts/',    include('apps.accounts.urls')),
     path('api/referentiel/', include('apps.referentiel.urls')),
     path('api/dossiers/',    include('apps.dossiers.urls')),

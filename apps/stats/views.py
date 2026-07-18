@@ -2,15 +2,50 @@ from rest_framework.views import APIView
 from rest_framework.viewsets import ReadOnlyModelViewSet
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from django.utils import timezone
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter
 
-from .models import FaitAgrege, ObjectifPeriode
-from .serializers import FaitAgregeSerializer, ObjectifPeriodeSerializer
+from .models import FaitAgrege
+from .serializers import FaitAgregeSerializer
 from apps.dossiers.models import Dossier, Contrat
 from apps.controle.models import ControleQualite, AnomalieControle
 from apps.referentiel.models import Village, Zone
 
 
+@extend_schema(
+    tags=['Statistiques'],
+    summary='Tableau de bord principal',
+    description=(
+        'Retourne tous les KPIs pour l\'écran d\'accueil du tableau de bord :\n\n'
+        '- **kpis.dossiers** : total, en cours, validés, rejetés\n'
+        '- **kpis.contrats** : total, signés\n'
+        '- **kpis.anomalies** : total, non corrigées, bloquantes\n'
+        '- **kpis.controles** : validés, rejetés\n'
+        '- **kpis.villages** : total, validés, approuvés, délimités\n'
+        '- **recents** : 8 derniers dossiers créés\n'
+        '- **anomalies** : 6 dernières anomalies non corrigées\n'
+        '- **par_zone** : statistiques dossiers/contrats/villages par zone'
+    ),
+    responses={
+        200: {
+            'type': 'object',
+            'properties': {
+                'kpis': {
+                    'type': 'object',
+                    'properties': {
+                        'dossiers':  {'type': 'object'},
+                        'contrats':  {'type': 'object'},
+                        'anomalies': {'type': 'object'},
+                        'controles': {'type': 'object'},
+                        'villages':  {'type': 'object'},
+                    },
+                },
+                'recents':   {'type': 'array', 'items': {'type': 'object'}},
+                'anomalies': {'type': 'array', 'items': {'type': 'object'}},
+                'par_zone':  {'type': 'array', 'items': {'type': 'object'}},
+            },
+        }
+    },
+)
 class DashboardView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -100,6 +135,25 @@ class DashboardView(APIView):
         })
 
 
+@extend_schema_view(
+    list=extend_schema(
+        tags=['Statistiques'],
+        summary='Faits agrégés par période',
+        description=(
+            'Retourne les faits agrégés (snapshots périodiques) calculés par le système. '
+            'Filtrable par zone, période et source.'
+        ),
+        parameters=[
+            OpenApiParameter('zone',    description='ID de la zone', required=False),
+            OpenApiParameter('periode', description='Période au format YYYY-MM (ex: 2026-07)', required=False),
+            OpenApiParameter('source',  description='Source du fait agrégé', required=False),
+        ],
+    ),
+    retrieve=extend_schema(
+        tags=['Statistiques'],
+        summary='Détail d\'un fait agrégé',
+    ),
+)
 class FaitAgregeViewSet(ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class   = FaitAgregeSerializer

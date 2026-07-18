@@ -15,12 +15,12 @@ class RapportSerializer(serializers.ModelSerializer):
             'cree_le', 'modifie_le',
         ]
 
-    def get_redige_par_nom(self, obj):
+    def get_redige_par_nom(self, obj) -> str | None:
         if obj.redige_par:
             return f'{obj.redige_par.first_name} {obj.redige_par.last_name}'.strip()
         return None
 
-    def get_fichier_url(self, obj):
+    def get_fichier_url(self, obj) -> str | None:
         if obj.fichier:
             request = self.context.get('request')
             if request:

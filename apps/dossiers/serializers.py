@@ -15,7 +15,7 @@ class DossierListSerializer(serializers.ModelSerializer):
             'cree_le', 'modifie_le', 'cree_par', 'cree_par_nom',
         ]
 
-    def get_cree_par_nom(self, obj):
+    def get_cree_par_nom(self, obj) -> str | None:
         if obj.cree_par:
             return f'{obj.cree_par.first_name} {obj.cree_par.last_name}'.strip() or obj.cree_par.username
         return None
@@ -28,7 +28,7 @@ class HistoriqueStatutSerializer(serializers.ModelSerializer):
         model  = HistoriqueStatutDossier
         fields = ['id', 'ancien_statut', 'nouveau_statut', 'modifie_par_nom', 'modifie_le', 'commentaire']
 
-    def get_modifie_par_nom(self, obj):
+    def get_modifie_par_nom(self, obj) -> str | None:
         if obj.modifie_par:
             return f'{obj.modifie_par.first_name} {obj.modifie_par.last_name}'.strip()
         return None

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Zone, Region, Departement, SousPrefecture, Village
+from .models import Zone, Region, SousPrefecture, Village
 
 
 class ZoneSerializer(serializers.ModelSerializer):
@@ -23,10 +23,20 @@ class SousPrefectureSerializer(serializers.ModelSerializer):
 
 
 class VillageListSerializer(serializers.ModelSerializer):
-    zone_nom           = serializers.CharField(source='zone.nom',  read_only=True)
+    zone_nom            = serializers.CharField(source='zone.nom', read_only=True)
     sous_prefecture_nom = serializers.SerializerMethodField()
 
-    # DTV progress: étapes complétées / 7
+    # Champs DTV — lus via la relation OneToOne Village.dtv
+    recueil_historique_fait = serializers.SerializerMethodField()
+    layons_identifies       = serializers.SerializerMethodField()
+    pv_constat_signes       = serializers.SerializerMethodField()
+    delimite                = serializers.SerializerMethodField()
+    publicite_ouverte       = serializers.SerializerMethodField()
+    publicite_cloturee      = serializers.SerializerMethodField()
+    approuve                = serializers.SerializerMethodField()
+    valide                  = serializers.SerializerMethodField()
+
+    # DTV progress: étapes complétées / 8
     dtv_progress = serializers.SerializerMethodField()
     dtv_etape    = serializers.SerializerMethodField()
 
@@ -40,31 +50,66 @@ class VillageListSerializer(serializers.ModelSerializer):
             'dtv_progress', 'dtv_etape',
         ]
 
-    def get_sous_prefecture_nom(self, obj):
+    def _dtv(self, obj):
+        try:
+            return obj.dtv
+        except Exception:
+            return None
+
+    def get_sous_prefecture_nom(self, obj) -> str | None:
         if obj.sous_prefecture_fk:
             return obj.sous_prefecture_fk.nom
         return obj.sous_prefecture
 
-    def get_dtv_progress(self, obj):
-        bools = [
-            obj.recueil_historique_fait,
-            bool(obj.layons_identifies),
-            bool(obj.pv_constat_signes),
-            obj.delimite,
-            obj.publicite_ouverte,
-            obj.publicite_cloturee,
-            obj.approuve,
-            obj.valide,
-        ]
-        return sum(bools)
+    def get_recueil_historique_fait(self, obj) -> bool:
+        d = self._dtv(obj); return d.recueil_historique_fait if d else False
 
-    def get_dtv_etape(self, obj):
-        if obj.valide:            return 'VALIDE'
-        if obj.approuve:          return 'APPROUVE'
-        if obj.publicite_cloturee: return 'PUB_CLOTUREE'
-        if obj.publicite_ouverte:  return 'PUB_OUVERTE'
-        if obj.delimite:           return 'DELIMITE'
-        if obj.pv_constat_signes:  return 'PV_SIGNES'
-        if obj.layons_identifies:  return 'LAYONS'
-        if obj.recueil_historique_fait: return 'RECUEIL'
+    def get_layons_identifies(self, obj) -> int:
+        d = self._dtv(obj); return d.layons_identifies if d else 0
+
+    def get_pv_constat_signes(self, obj) -> int:
+        d = self._dtv(obj); return d.pv_constat_signes if d else 0
+
+    def get_delimite(self, obj) -> bool:
+        d = self._dtv(obj); return d.delimite if d else False
+
+    def get_publicite_ouverte(self, obj) -> bool:
+        d = self._dtv(obj); return d.publicite_ouverte if d else False
+
+    def get_publicite_cloturee(self, obj) -> bool:
+        d = self._dtv(obj); return d.publicite_cloturee if d else False
+
+    def get_approuve(self, obj) -> bool:
+        d = self._dtv(obj); return d.approuve if d else False
+
+    def get_valide(self, obj) -> bool:
+        d = self._dtv(obj); return d.valide if d else False
+
+    def get_dtv_progress(self, obj) -> int:
+        d = self._dtv(obj)
+        if not d:
+            return 0
+        return sum([
+            d.recueil_historique_fait,
+            bool(d.layons_identifies),
+            bool(d.pv_constat_signes),
+            d.delimite,
+            d.publicite_ouverte,
+            d.publicite_cloturee,
+            d.approuve,
+            d.valide,
+        ])
+
+    def get_dtv_etape(self, obj) -> str:
+        d = self._dtv(obj)
+        if not d:
+            return 'NON_DEMARRE'
+        if d.valide:              return 'VALIDE'
+        if d.approuve:            return 'APPROUVE'
+        if d.publicite_cloturee:  return 'PUB_CLOTUREE'
+        if d.publicite_ouverte:   return 'PUB_OUVERTE'
+        if d.delimite:            return 'DELIMITE'
+        if d.pv_constat_signes:   return 'PV_SIGNES'
+        if d.layons_identifies:   return 'LAYONS'
+        if d.recueil_historique_fait: return 'RECUEIL'
         return 'NON_DEMARRE'
