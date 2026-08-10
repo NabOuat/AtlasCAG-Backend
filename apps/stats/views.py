@@ -20,7 +20,7 @@ from apps.referentiel.models import Village, Zone
         '- **kpis.contrats** : total, signés\n'
         '- **kpis.anomalies** : total, non corrigées, bloquantes\n'
         '- **kpis.controles** : validés, rejetés\n'
-        '- **kpis.villages** : total, validés, approuvés, délimités\n'
+        '- **kpis.villages** : total, validés, approuvés, existants\n'
         '- **recents** : 8 derniers dossiers créés\n'
         '- **anomalies** : 6 dernières anomalies non corrigées\n'
         '- **par_zone** : statistiques dossiers/contrats/villages par zone'
@@ -66,11 +66,11 @@ class DashboardView(APIView):
         controles_rejetes  = ControleQualite.objects.filter(statut='REJETE').count()
         controles_valides  = ControleQualite.objects.filter(statut='VALIDE').count()
 
-        # ── Villages DTV ───────────────────────────────────
+        # ── Villages DTV (les étapes de progression vivent sur DTV, pas sur Village) ──
         villages_total     = Village.objects.count()
-        villages_valides   = Village.objects.filter(valide=True).count()
-        villages_approuves = Village.objects.filter(approuve=True).count()
-        villages_delimites = Village.objects.filter(delimite=True).count()
+        villages_valides   = Village.objects.filter(dtv__valide=True).count()
+        villages_approuves = Village.objects.filter(dtv__approuve=True).count()
+        villages_existants = Village.objects.filter(dtv__delimite=True).count()
 
         # ── Dossiers récents ───────────────────────────────
         recents = Dossier.objects.select_related('village', 'zone').order_by('-cree_le')[:8]
@@ -127,7 +127,7 @@ class DashboardView(APIView):
                               'bloquantes': anom_bloquantes},
                 'controles': {'valides': controles_valides, 'rejetes': controles_rejetes},
                 'villages':  {'total': villages_total, 'valides': villages_valides,
-                              'approuves': villages_approuves, 'delimites': villages_delimites},
+                              'approuves': villages_approuves, 'existants': villages_existants},
             },
             'recents':   recents_data,
             'anomalies': anom_data,

@@ -108,7 +108,7 @@ class VillageListSerializer(serializers.ModelSerializer):
         if d.approuve:            return 'APPROUVE'
         if d.publicite_cloturee:  return 'PUB_CLOTUREE'
         if d.publicite_ouverte:   return 'PUB_OUVERTE'
-        if d.delimite:            return 'DELIMITE'
+        if d.delimite:            return 'EXISTANT'
         if d.pv_constat_signes:   return 'PV_SIGNES'
         if d.layons_identifies:   return 'LAYONS'
         if d.recueil_historique_fait: return 'RECUEIL'

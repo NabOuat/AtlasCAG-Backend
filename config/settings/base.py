@@ -30,6 +30,7 @@ INSTALLED_APPS = [
     'apps.stats',
     'apps.rapports',
     'apps.terrain',
+    'apps.publicite',
 ]
 
 MIDDLEWARE = [

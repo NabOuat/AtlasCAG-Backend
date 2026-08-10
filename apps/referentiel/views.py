@@ -53,7 +53,7 @@ class RegionViewSet(viewsets.ReadOnlyModelViewSet):
             OpenApiParameter('sous_prefecture', description='Nom partiel de la sous-préfecture', required=False),
             OpenApiParameter(
                 'etape',
-                description='Étape DTV : `VALIDE`, `APPROUVE`, `DELIMITE`, `NON_DEMARRE`',
+                description='Étape DTV : `VALIDE`, `APPROUVE`, `EXISTANT`, `NON_DEMARRE`',
                 required=False,
             ),
         ],
@@ -74,9 +74,12 @@ class VillageViewSet(viewsets.ReadOnlyModelViewSet):
         etape = self.request.query_params.get('etape')
         if zone:  qs = qs.filter(zone__id=zone)
         if sp:    qs = qs.filter(sous_prefecture__icontains=sp)
-        if etape == 'VALIDE':        qs = qs.filter(dtv__valide=True)
+        # 'DELIMITE' toléré en entrée pour compatibilité ascendante, non documenté (cf. cahier des charges : le
+        # terme « Délimité » est remplacé par « Existant » dans toute la nomenclature exposée).
+        if etape in ('EXISTANT', 'DELIMITE'):
+            qs = qs.filter(dtv__delimite=True, dtv__approuve=False)
+        elif etape == 'VALIDE':      qs = qs.filter(dtv__valide=True)
         elif etape == 'APPROUVE':    qs = qs.filter(dtv__approuve=True, dtv__valide=False)
-        elif etape == 'DELIMITE':    qs = qs.filter(dtv__delimite=True, dtv__approuve=False)
         elif etape == 'NON_DEMARRE': qs = qs.filter(dtv__recueil_historique_fait=False)
         return qs
 
@@ -85,7 +88,7 @@ class VillageViewSet(viewsets.ReadOnlyModelViewSet):
         summary='Statistiques DTV par zone',
         description=(
             'Retourne les compteurs d\'avancement DTV pour une zone donnée : '
-            'total, validés, approuvés, délimités, publicité ouverte/clôturée, non démarrés.'
+            'total, validés, approuvés, existants, publicité ouverte/clôturée, non démarrés.'
         ),
         parameters=[
             OpenApiParameter('zone', description='ID de la zone', required=False),
@@ -97,7 +100,7 @@ class VillageViewSet(viewsets.ReadOnlyModelViewSet):
                     'total':        {'type': 'integer'},
                     'valide':       {'type': 'integer'},
                     'approuve':     {'type': 'integer'},
-                    'delimite':     {'type': 'integer'},
+                    'existant':     {'type': 'integer'},
                     'pub_ouverte':  {'type': 'integer'},
                     'pub_cloturee': {'type': 'integer'},
                     'non_demarre':  {'type': 'integer'},
@@ -114,7 +117,7 @@ class VillageViewSet(viewsets.ReadOnlyModelViewSet):
             'total':          qs.count(),
             'valide':         qs.filter(dtv__valide=True).count(),
             'approuve':       qs.filter(dtv__approuve=True).count(),
-            'delimite':       qs.filter(dtv__delimite=True).count(),
+            'existant':       qs.filter(dtv__delimite=True).count(),
             'pub_ouverte':    qs.filter(dtv__publicite_ouverte=True).count(),
             'pub_cloturee':   qs.filter(dtv__publicite_cloturee=True).count(),
             'non_demarre':    qs.filter(dtv__recueil_historique_fait=False).count(),

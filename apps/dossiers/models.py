@@ -43,8 +43,13 @@ class Dossier(models.Model):
         ('LEVE',             'Relevé terrain'),
         ('PROV',             'Provisoire'),
         ('EN_PUBLICITE',     'En publicité'),
+        # 'APRES_PUBLICITE' conservé pour compatibilité avec les données existantes, mais n'est
+        # plus utilisé par le workflow de publicité (apps.publicite), qui distingue désormais
+        # explicitement Approuvée / Rejetée / Validée (cf. cahier des charges, section 4).
         ('APRES_PUBLICITE',  'Après publicité'),
         ('DEF',              'Définitif'),
+        ('APPROUVE',         'Approuvée'),
+        ('VALIDE',           'Validée'),
         ('REJETE',           'Rejeté'),
     ]
 

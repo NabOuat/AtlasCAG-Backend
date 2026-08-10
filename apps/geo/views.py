@@ -1,13 +1,33 @@
+import csv
 import json
 
 from django.db import connections, OperationalError
+from django.http import StreamingHttpResponse, HttpResponse
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 
-VALID_ZONES = {'cavally', 'worodougou'}
+from .db import (
+    VALID_ZONES,
+    SKIP_SCHEMAS as _SKIP_SCHEMAS,
+    db_alias as _db_alias,
+    discover_schema_tables as _discover_schema_tables,
+    table_exists as _table_exists,
+    non_geom_columns as _non_geom_columns,
+    get_table_srid as _get_table_srid,
+)
+from .queries import (
+    SOUS_PREFECTURE_TABLES, DTV_FALLBACK_TABLES, CF_PUBLIC_TABLES,
+    CF_SCHEMA_TABLES, CF_ONGLET_EXTRA_TABLES, DTV_SCHEMA_TABLES,
+    TABLE_STATUT as _TABLE_STATUT, CF_STATUTS, DTV_STATUTS,
+    EXACT_FILTERS_CF, EXACT_FILTERS_DTV,
+    discover_cf_schema_tables, discover_dtv_schema_tables,
+    parse_exact_filters, parse_float, filter_schema_tables_by_statut,
+    fetch_attribute_rows, sort_results, compute_stats,
+)
+
 VALID_TYPES = {'cf', 'dtv', 'sous_prefecture'}
 
 # CRS source RGCI_TM_5_5_NW — BNETD/IGT Côte d'Ivoire, pas de code EPSG officiel.
@@ -16,53 +36,6 @@ PROJ_RGCI = (
     '+x_0=500000 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs'
 )
 
-# Schemas système à ignorer lors de la découverte
-_SKIP_SCHEMAS = frozenset({
-    'information_schema', 'pg_catalog', 'topology',
-    'admin', 'test', 'test_29n', 'test_30n',
-})
-
-# Tables dans le schéma public uniquement
-SOUS_PREFECTURE_TABLES = ['Sous_prefecture']
-DTV_FALLBACK_TABLES    = ['Villages_delimites']
-
-# Tables CF dans le schéma public (statut fixe)
-CF_PUBLIC_TABLES = ['cf_poly_parcelle_Def', 'CF_Existants']
-
-# Tables CF par sous-préfecture — géoportail (carte)
-CF_SCHEMA_TABLES = [
-    'cf_poly_parcelle_leve',
-    'cf_poly_parcelle_Prov',
-]
-
-# Tables CF par sous-préfecture — onglet attributaire uniquement
-CF_ONGLET_EXTRA_TABLES = [
-    'cf_parcelle_en_publicite',
-    'cf_parcelle_apres_publicite',
-    'cf_parcelle_rejete',
-]
-
-# Tables DTV présentes dans chaque schéma sous-préfecture
-DTV_SCHEMA_TABLES = [
-    'dtv_poly_village_leve',
-    'dtv_poly_village_Prov',
-]
-
-# Statut déduit du nom de table
-_TABLE_STATUT = {
-    'cf_poly_parcelle_leve':       'LEVE',
-    'cf_poly_parcelle_Prov':       'PROV',
-    'cf_poly_parcelle_Def':        'DEF',
-    'CF_Existants':                'EXISTANT',
-    'cf_parcelle_en_publicite':    'EN_PUBLICITE',
-    'cf_parcelle_apres_publicite': 'APRES_PUBLICITE',
-    'cf_parcelle_rejete':          'REJETE',
-    'dtv_poly_village_leve':       'LEVE',
-    'dtv_poly_village_Prov':       'PROV',
-    'dtv_poly_village_Def':        'DEF',
-    'Villages_delimites':          'DELIMITE',
-}
-
 # CF_Existants Cavally : coordonnées hors zone → exclure du fitBounds
 _EXCLUDE_BOUNDS_TABLES = {'CF_Existants'}
 
@@ -70,71 +43,8 @@ _CI_BOUNDS = (-9.5, 2.5, -2.0, 11.0)
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers (GeoJSON — pagination/tri/export tabulaires : voir apps/geo/queries.py)
 # ---------------------------------------------------------------------------
-
-def _db_alias(zone: str) -> str:
-    return f'{zone}_spatial'
-
-
-def _discover_schema_tables(cursor, table_names: list[str]) -> list[tuple[str, str]]:
-    """Retourne (schema, table_name) pour toutes les tables matchant les noms donnés
-    dans tous les schémas non-système, triées par schema puis table."""
-    placeholders = ','.join(['%s'] * len(table_names))
-    skip = list(_SKIP_SCHEMAS)
-    skip_ph = ','.join(['%s'] * len(skip))
-    cursor.execute(
-        f"SELECT table_schema, table_name "
-        f"FROM information_schema.tables "
-        f"WHERE table_type='BASE TABLE' "
-        f"  AND table_name IN ({placeholders}) "
-        f"  AND table_schema NOT IN ({skip_ph}) "
-        f"ORDER BY table_schema, table_name",
-        table_names + skip,
-    )
-    return [(row[0], row[1]) for row in cursor.fetchall()]
-
-
-def _table_exists(cursor, schema: str, table: str) -> bool:
-    cursor.execute(
-        "SELECT 1 FROM information_schema.tables "
-        "WHERE table_schema=%s AND table_name=%s",
-        [schema, table],
-    )
-    return cursor.fetchone() is not None
-
-
-def _non_geom_columns(cursor, schema: str, table: str) -> list[str]:
-    cursor.execute(
-        "SELECT column_name FROM information_schema.columns "
-        "WHERE table_schema=%s AND table_name=%s "
-        "AND udt_name NOT IN ('geometry','geography') "
-        "ORDER BY ordinal_position",
-        [schema, table],
-    )
-    return [row[0] for row in cursor.fetchall()]
-
-
-def _get_table_srid(cursor, schema: str, table: str) -> int:
-    try:
-        cursor.execute(
-            f'SELECT ST_SRID(geom) FROM "{schema}"."{table}" WHERE geom IS NOT NULL LIMIT 1'
-        )
-        row = cursor.fetchone()
-        return row[0] if row else 0
-    except Exception:
-        return 0
-
-
-def _has_data_multi(cursor, schema_tables: list[tuple[str, str]]) -> bool:
-    for sch, tbl in schema_tables:
-        try:
-            cursor.execute(f'SELECT 1 FROM "{sch}"."{tbl}" WHERE geom IS NOT NULL LIMIT 1')
-            if cursor.fetchone():
-                return True
-        except Exception:
-            pass
-    return False
 
 
 def _table_to_features(
@@ -244,10 +154,10 @@ def _compute_bounds(features: list[dict]) -> list | None:
         '**Valeurs `zone`** : `cavally`, `worodougou`\n\n'
         '**Valeurs `layer_type`** :\n'
         '- `cf` — Certificats fonciers : levé, provisoire, définitif, existant (toutes tables)\n'
-        '- `dtv` — Délimitations territoriales villageoises : délimités, levé, provisoire\n'
+        '- `dtv` — Délimitations territoriales villageoises : existant, levé, provisoire\n'
         '- `sous_prefecture` — Limites administratives des sous-préfectures\n\n'
         '**Propriétés de chaque Feature** : tous les champs attributaires de la table shapefile, '
-        'plus `_statut` (LEVE/PROV/DEF/EXISTANT/DELIMITE), `_schema`, `_source_table`, `_exclude_from_bounds`.\n\n'
+        'plus `_statut` (LEVE/PROV/DEF/EXISTANT), `_schema`, `_source_table`, `_exclude_from_bounds`.\n\n'
         '**`_meta`** dans la réponse : `zone`, `layer_type`, `tables` interrogées, '
         '`feature_count`, `bounds` ([[lat_min, lng_min], [lat_max, lng_max]]).\n\n'
         'Géométries reprojetées en WGS84 (EPSG:4326). Limite : 8 000 features par table.'
@@ -344,27 +254,109 @@ def geo_layer(_request, zone: str, layer_type: str):
         )
 
 
+def _parse_pagination(request):
+    try:
+        page      = max(1, int(request.GET.get('page', 1)))
+        page_size = min(500, max(1, int(request.GET.get('page_size', 100))))
+    except ValueError:
+        page, page_size = 1, 100
+    return page, page_size
+
+
+def _parse_superficie_params(request):
+    return (
+        parse_float(request.GET.get('superficie')),
+        parse_float(request.GET.get('superficie_min')),
+        parse_float(request.GET.get('superficie_max')),
+    )
+
+
+CF_ATTR_PARAMETERS = [
+    OpenApiParameter('zone',          location='path', description='`cavally` ou `worodougou`'),
+    OpenApiParameter('region',        description='Filtrer par nom de région (insensible à la casse)', required=False),
+    OpenApiParameter('departement',   description='Filtrer par nom de département', required=False),
+    OpenApiParameter('sous_pref',     description='Filtrer par nom de sous-préfecture', required=False),
+    OpenApiParameter('village',       description='Filtrer par nom de village', required=False),
+    OpenApiParameter('projet',        description='Filtrer par projet', required=False),
+    OpenApiParameter('operateur',     description='Filtrer par opérateur (OTA)', required=False),
+    OpenApiParameter('num_demande',   description='Filtrer par numéro de demande exact', required=False),
+    OpenApiParameter('nom_demandeur', description='Filtrer par nom du demandeur exact', required=False),
+    OpenApiParameter('statut',        description=f'Filtrer par statut : {", ".join(f"`{s}`" for s in CF_STATUTS)}', required=False),
+    OpenApiParameter('superficie',     description='Superficie exacte (ha)', required=False, type=float),
+    OpenApiParameter('superficie_min', description='Superficie minimale (ha)', required=False, type=float),
+    OpenApiParameter('superficie_max', description='Superficie maximale (ha)', required=False, type=float),
+    OpenApiParameter('search', description='Recherche libre sur toutes les colonnes attributaires', required=False),
+    OpenApiParameter('ordering', description='Tri, ex. `SUPERF` ou `-SUPERF`', required=False),
+]
+
+EXPORT_RESPONSE = {
+    200: {'description': 'Fichier CSV ou XLSX'},
+    400: {'description': 'Zone ou format inconnu'},
+    503: {'description': 'Connexion PostGIS impossible'},
+}
+
+CF_STATS_RESPONSE = {
+    200: {
+        'type': 'object',
+        'properties': {
+            'zone':  {'type': 'string'},
+            'stats': {
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'statut':               {'type': 'string'},
+                        'nb_parcelles':         {'type': 'integer'},
+                        'superficie_totale_ha': {'type': 'number'},
+                    },
+                },
+            },
+        },
+    },
+    400: {'description': 'Zone inconnue'},
+    503: {'description': 'Connexion PostGIS impossible'},
+}
+
+DTV_STATS_RESPONSE = {
+    200: {
+        'type': 'object',
+        'properties': {
+            'zone':  {'type': 'string'},
+            'stats': {
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'statut':               {'type': 'string'},
+                        'nb_villages':          {'type': 'integer'},
+                        'superficie_totale_ha': {'type': 'number'},
+                    },
+                },
+            },
+        },
+    },
+    400: {'description': 'Zone inconnue'},
+    503: {'description': 'Connexion PostGIS impossible'},
+}
+
+
 @extend_schema(
     tags=['Géoportail'],
-    summary='Attributs tabulaires CF — onglet attributaire (sans géométrie)',
+    summary='Table attributaire CF — module CF (sans géométrie)',
     description=(
-        'Retourne les données attributaires des parcelles CF de la zone, **sans géométrie**. '
-        'Utilisé pour l\'onglet tableau du géoportail.\n\n'
-        '**Colonnes retournées** : `NUM_DEMAND`, `NOM_REGION`, `NOM_DEPART`, `NOM_SSPREF`, '
-        '`NOM_VILLAGE`, `NOM_DEMAND`, `SUPERF`, `PERIM`, `NOM_PROJET`, `NOM_OTA`, `STATUT`, `N_DEMCGE`, `_statut`, `_schema`.\n\n'
-        'Toutes les tables CF sont interrogées (levé, provisoire, définitif, existant, publicité, rejeté). '
-        'La réponse inclut `totals_by_statut` pour connaître la répartition par type.\n\n'
-        '**Pagination manuelle** : `page` (défaut 1) et `page_size` (défaut 100, max 500).'
+        'Retourne les enregistrements de la couche **CF – Parcelles (Polygones)**, directement '
+        'depuis la table attributaire (aucune donnée saisie manuellement). Toutes les tables CF '
+        'sont interrogées (levé, provisoire, définitif, existant, en publicité, approuvée, '
+        'rejetée, validée).\n\n'
+        'La réponse inclut `columns` (liste des colonnes réellement disponibles dans les tables '
+        'interrogées, pour un affichage dynamique côté frontend) et `totals_by_statut`.\n\n'
+        '**Pagination manuelle** : `page` (défaut 1) et `page_size` (défaut 100, max 500). '
+        'Tri via `ordering`, recherche libre via `search`, filtre de superficie via '
+        '`superficie`/`superficie_min`/`superficie_max`.'
     ),
-    parameters=[
-        OpenApiParameter('zone',       location='path', description='`cavally` ou `worodougou`'),
-        OpenApiParameter('region',     description='Filtrer par nom de région (insensible à la casse)', required=False),
-        OpenApiParameter('departement',description='Filtrer par nom de département', required=False),
-        OpenApiParameter('sous_pref',  description='Filtrer par nom de sous-préfecture', required=False),
-        OpenApiParameter('village',    description='Filtrer par nom de village', required=False),
-        OpenApiParameter('statut',     description='Filtrer par statut : `LEVE`, `PROV`, `DEF`, `EXISTANT`, `EN_PUBLICITE`, `APRES_PUBLICITE`, `REJETE`', required=False),
-        OpenApiParameter('page',       description='Numéro de page (défaut 1)', required=False, type=int),
-        OpenApiParameter('page_size',  description='Taille de page (défaut 100, max 500)', required=False, type=int),
+    parameters=CF_ATTR_PARAMETERS + [
+        OpenApiParameter('page',      description='Numéro de page (défaut 1)', required=False, type=int),
+        OpenApiParameter('page_size', description='Taille de page (défaut 100, max 500)', required=False, type=int),
     ],
     responses={
         200: {
@@ -373,6 +365,7 @@ def geo_layer(_request, zone: str, layer_type: str):
                 'total':            {'type': 'integer'},
                 'page':             {'type': 'integer'},
                 'page_size':        {'type': 'integer'},
+                'columns':          {'type': 'array', 'items': {'type': 'string'}},
                 'totals_by_statut': {'type': 'object', 'description': 'Compteur par statut CF'},
                 'results':          {'type': 'array', 'items': {'type': 'object'}},
             },
@@ -383,113 +376,173 @@ def geo_layer(_request, zone: str, layer_type: str):
 )
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
-def geo_cf_parcelles(_request, zone: str):
-    """Données tabulaires CF pour l'onglet attributaire (sans géométrie).
-    Params GET optionnels : region, departement, sous_pref, village, statut, page, page_size.
-    """
+def geo_cf_parcelles(request, zone: str):
+    """Table attributaire CF (module CF) — filtrable, triable, paginée, sans géométrie."""
     zone = zone.lower()
     if zone not in VALID_ZONES:
         return Response({'detail': f'Zone inconnue : {zone}'}, status=400)
 
-    # Filtres
-    q_region  = _request.GET.get('region', '').strip().upper()
-    q_dept    = _request.GET.get('departement', '').strip().upper()
-    q_sp      = _request.GET.get('sous_pref', '').strip().upper()
-    q_village = _request.GET.get('village', '').strip().upper()
-    q_statut  = _request.GET.get('statut', '').strip().upper()
-
-    try:
-        page      = max(1, int(_request.GET.get('page', 1)))
-        page_size = min(500, max(1, int(_request.GET.get('page_size', 100))))
-    except ValueError:
-        page, page_size = 1, 100
-
-    # Colonnes fixes retournées (sous-ensemble pertinent)
-    COLS = [
-        'NUM_DEMAND', 'NOM_REGION', 'NOM_DEPART', 'NOM_SSPREF',
-        'NOM_VILLAGE', 'NOM_DEMAND', 'SUPERF', 'PERIM',
-        'NOM_PROJET', 'NOM_OTA', 'STATUT', 'N_DEMCGE',
-    ]
-
-    results   = []
-    totals_by_statut: dict[str, int] = {}
+    exact_filters = parse_exact_filters(request, EXACT_FILTERS_CF)
+    q_statut = (request.GET.get('statut') or '').strip().upper()
+    superficie_eq, superficie_min, superficie_max = _parse_superficie_params(request)
+    search   = (request.GET.get('search') or '').strip()
+    ordering = (request.GET.get('ordering') or '').strip()
+    page, page_size = _parse_pagination(request)
 
     try:
         with connections[_db_alias(zone)].cursor() as cursor:
-
-            schema_tables: list[tuple[str, str]] = []
-            for t in CF_PUBLIC_TABLES:
-                if _table_exists(cursor, 'public', t):
-                    schema_tables.append(('public', t))
-            # Onglet = carte + tables publicite/rejete
-            all_cf_schema = CF_SCHEMA_TABLES + CF_ONGLET_EXTRA_TABLES
-            schema_tables.extend(_discover_schema_tables(cursor, all_cf_schema))
-
-            for sch, tbl in schema_tables:
-                statut = _TABLE_STATUT.get(tbl, tbl.upper())
-
-                # filtre statut
-                if q_statut and statut != q_statut:
-                    continue
-
-                # Colonnes disponibles dans cette table
-                avail = _non_geom_columns(cursor, sch, tbl)
-                cols_to_fetch = [c for c in COLS if c in avail]
-                if not cols_to_fetch:
-                    continue
-
-                col_sql = ', '.join(f'"{c}"' for c in cols_to_fetch)
-                where_parts = ['1=1']
-                params: list = []
-
-                if q_region and 'NOM_REGION' in avail:
-                    where_parts.append('UPPER("NOM_REGION") = %s')
-                    params.append(q_region)
-                if q_dept and 'NOM_DEPART' in avail:
-                    where_parts.append('UPPER("NOM_DEPART") = %s')
-                    params.append(q_dept)
-                if q_sp and 'NOM_SSPREF' in avail:
-                    where_parts.append('UPPER("NOM_SSPREF") = %s')
-                    params.append(q_sp)
-                if q_village and 'NOM_VILLAGE' in avail:
-                    where_parts.append('UPPER("NOM_VILLAGE") = %s')
-                    params.append(q_village)
-
-                where_sql = ' AND '.join(where_parts)
-
-                try:
-                    cursor.execute(
-                        f'SELECT {col_sql} FROM "{sch}"."{tbl}" WHERE {where_sql}',
-                        params,
-                    )
-                    col_names = [desc[0] for desc in cursor.description]
-                    rows = cursor.fetchall()
-                    n = len(rows)
-                    totals_by_statut[statut] = totals_by_statut.get(statut, 0) + n
-                    for row in rows:
-                        rec = {col_names[i]: row[i] for i in range(len(col_names))}
-                        rec['_statut'] = statut
-                        rec['_schema'] = sch
-                        results.append(rec)
-                except Exception:
-                    pass
-
+            schema_tables = filter_schema_tables_by_statut(discover_cf_schema_tables(cursor), q_statut)
+            results, totals_by_statut, columns = fetch_attribute_rows(
+                cursor, schema_tables,
+                exact_filters=exact_filters,
+                superficie_eq=superficie_eq, superficie_min=superficie_min, superficie_max=superficie_max,
+                search=search or None,
+            )
     except OperationalError as exc:
         return Response(
             {'detail': f'Connexion impossible ({zone}) : {exc}'},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
+    results = sort_results(results, ordering, columns)
+
     total = len(results)
     start = (page - 1) * page_size
     page_data = results[start: start + page_size]
 
     return Response({
-        'total':           total,
-        'page':            page,
-        'page_size':       page_size,
+        'total':            total,
+        'page':             page,
+        'page_size':        page_size,
+        'columns':          columns,
         'totals_by_statut': totals_by_statut,
-        'results':         page_data,
+        'results':          page_data,
+    })
+
+
+def _export_response(results, columns, fmt: str, filename: str):
+    export_cols = columns + ['_statut', '_schema']
+    if fmt == 'xlsx':
+        try:
+            import openpyxl
+        except ImportError:
+            return Response(
+                {'detail': "Export XLSX indisponible : dépendance 'openpyxl' non installée."},
+                status=status.HTTP_501_NOT_IMPLEMENTED,
+            )
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(export_cols)
+        for rec in results:
+            ws.append([rec.get(c) for c in export_cols])
+        response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        response['Content-Disposition'] = f'attachment; filename="{filename}.xlsx"'
+        wb.save(response)
+        return response
+
+    class _Echo:
+        def write(self, value):
+            return value
+
+    writer = csv.writer(_Echo())
+
+    def _rows():
+        yield writer.writerow(export_cols)
+        for rec in results:
+            yield writer.writerow([rec.get(c) for c in export_cols])
+
+    response = StreamingHttpResponse(_rows(), content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="{filename}.csv"'
+    return response
+
+
+@extend_schema(
+    tags=['Géoportail'],
+    summary='Export CF (CSV / XLSX)',
+    description=(
+        'Exporte les enregistrements de la table attributaire CF (mêmes filtres que '
+        '`cf/parcelles/`, sans pagination) au format CSV ou XLSX.'
+    ),
+    parameters=CF_ATTR_PARAMETERS + [
+        OpenApiParameter('format', description='`csv` (défaut) ou `xlsx`', required=False),
+    ],
+    responses=EXPORT_RESPONSE,
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def geo_cf_export(request, zone: str):
+    zone = zone.lower()
+    if zone not in VALID_ZONES:
+        return Response({'detail': f'Zone inconnue : {zone}'}, status=400)
+    fmt = (request.GET.get('format') or 'csv').strip().lower()
+    if fmt not in ('csv', 'xlsx'):
+        return Response({'detail': f'Format inconnu : {fmt}'}, status=400)
+
+    exact_filters = parse_exact_filters(request, EXACT_FILTERS_CF)
+    q_statut = (request.GET.get('statut') or '').strip().upper()
+    superficie_eq, superficie_min, superficie_max = _parse_superficie_params(request)
+    search = (request.GET.get('search') or '').strip()
+
+    try:
+        with connections[_db_alias(zone)].cursor() as cursor:
+            schema_tables = filter_schema_tables_by_statut(discover_cf_schema_tables(cursor), q_statut)
+            results, _, columns = fetch_attribute_rows(
+                cursor, schema_tables,
+                exact_filters=exact_filters,
+                superficie_eq=superficie_eq, superficie_min=superficie_min, superficie_max=superficie_max,
+                search=search or None,
+            )
+    except OperationalError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    return _export_response(results, columns, fmt, f'cf_{zone}')
+
+
+@extend_schema(
+    tags=['Géoportail'],
+    summary='Statistiques CF par statut (nombre + superficie)',
+    description=(
+        'Retourne, pour chaque statut CF, le nombre de parcelles et la superficie totale (ha) '
+        '— somme de la colonne attributaire `SUPERF`. Accepte les mêmes filtres que '
+        '`cf/parcelles/` pour rester cohérent avec la carte et les filtres actifs côté frontend.'
+    ),
+    parameters=CF_ATTR_PARAMETERS,
+    responses=CF_STATS_RESPONSE,
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def geo_cf_stats(request, zone: str):
+    zone = zone.lower()
+    if zone not in VALID_ZONES:
+        return Response({'detail': f'Zone inconnue : {zone}'}, status=400)
+
+    exact_filters = parse_exact_filters(request, EXACT_FILTERS_CF)
+    q_statut = (request.GET.get('statut') or '').strip().upper()
+    superficie_eq, superficie_min, superficie_max = _parse_superficie_params(request)
+    search = (request.GET.get('search') or '').strip()
+
+    try:
+        with connections[_db_alias(zone)].cursor() as cursor:
+            schema_tables = filter_schema_tables_by_statut(discover_cf_schema_tables(cursor), q_statut)
+            stats = compute_stats(
+                cursor, schema_tables,
+                exact_filters=exact_filters,
+                superficie_eq=superficie_eq, superficie_min=superficie_min, superficie_max=superficie_max,
+                search=search or None,
+            )
+    except OperationalError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    return Response({
+        'zone':  zone,
+        'stats': [
+            {
+                'statut':          s,
+                'nb_parcelles':    stats.get(s, {}).get('nb', 0),
+                'superficie_totale_ha': round(stats.get(s, {}).get('superficie_ha', 0.0), 2),
+            }
+            for s in CF_STATUTS
+        ],
     })
 
 
@@ -572,6 +625,277 @@ def geo_cf_detail(_request, zone: str):
 
     return Response({'zone': zone, 'num_demand': num_demand, 'records': results})
 
+
+# ---------------------------------------------------------------------------
+# Module DTV — table attributaire web (miroir du module CF)
+# ---------------------------------------------------------------------------
+
+DTV_ATTR_PARAMETERS = [
+    OpenApiParameter('zone',        location='path', description='`cavally` ou `worodougou`'),
+    OpenApiParameter('region',      description='Filtrer par nom de région (insensible à la casse)', required=False),
+    OpenApiParameter('departement', description='Filtrer par nom de département', required=False),
+    OpenApiParameter('sous_pref',   description='Filtrer par nom de sous-préfecture', required=False),
+    OpenApiParameter('village',     description='Filtrer par nom de village', required=False),
+    OpenApiParameter('projet',      description='Filtrer par projet', required=False),
+    OpenApiParameter('operateur',   description='Filtrer par opérateur (OTA)', required=False),
+    OpenApiParameter('statut',      description=f'Filtrer par statut : {", ".join(f"`{s}`" for s in DTV_STATUTS)}', required=False),
+    OpenApiParameter('superficie',     description='Superficie exacte (ha)', required=False, type=float),
+    OpenApiParameter('superficie_min', description='Superficie minimale (ha)', required=False, type=float),
+    OpenApiParameter('superficie_max', description='Superficie maximale (ha)', required=False, type=float),
+    OpenApiParameter('search', description='Recherche libre sur toutes les colonnes attributaires', required=False),
+    OpenApiParameter('ordering', description='Tri, ex. `NOM_VILLAGE` ou `-SUPERF`', required=False),
+]
+
+
+@extend_schema(
+    tags=['Géoportail'],
+    summary='Table attributaire DTV — module DTV (sans géométrie)',
+    description=(
+        'Retourne les enregistrements de la couche **DTV – Villages (Polygones)**, directement '
+        'depuis la table attributaire (aucune donnée saisie manuellement). Statuts : `LEVE`, '
+        '`PROV`, `EXISTANT` (anciennement « Délimité »).\n\n'
+        'La réponse inclut `columns` (colonnes réellement disponibles) et `totals_by_statut`. '
+        'Colonnes attendues si présentes dans la couche : code/nom du village, région, '
+        'département, sous-préfecture, superficie, périmètre, projet, opérateur, statut — '
+        'toute colonne absente de la couche réelle est simplement omise de la réponse.'
+    ),
+    parameters=DTV_ATTR_PARAMETERS + [
+        OpenApiParameter('page',      description='Numéro de page (défaut 1)', required=False, type=int),
+        OpenApiParameter('page_size', description='Taille de page (défaut 100, max 500)', required=False, type=int),
+    ],
+    responses={
+        200: {
+            'type': 'object',
+            'properties': {
+                'total':            {'type': 'integer'},
+                'page':             {'type': 'integer'},
+                'page_size':        {'type': 'integer'},
+                'columns':          {'type': 'array', 'items': {'type': 'string'}},
+                'totals_by_statut': {'type': 'object'},
+                'results':          {'type': 'array', 'items': {'type': 'object'}},
+            },
+        },
+        400: {'description': 'Zone inconnue'},
+        503: {'description': 'Connexion PostGIS impossible'},
+    },
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def geo_dtv_villages(request, zone: str):
+    """Table attributaire DTV (module DTV) — filtrable, triable, paginée, sans géométrie."""
+    zone = zone.lower()
+    if zone not in VALID_ZONES:
+        return Response({'detail': f'Zone inconnue : {zone}'}, status=400)
+
+    exact_filters = parse_exact_filters(request, EXACT_FILTERS_DTV)
+    q_statut = (request.GET.get('statut') or '').strip().upper()
+    superficie_eq, superficie_min, superficie_max = _parse_superficie_params(request)
+    search   = (request.GET.get('search') or '').strip()
+    ordering = (request.GET.get('ordering') or '').strip()
+    page, page_size = _parse_pagination(request)
+
+    try:
+        with connections[_db_alias(zone)].cursor() as cursor:
+            schema_tables = filter_schema_tables_by_statut(discover_dtv_schema_tables(cursor), q_statut)
+            results, totals_by_statut, columns = fetch_attribute_rows(
+                cursor, schema_tables,
+                exact_filters=exact_filters,
+                superficie_eq=superficie_eq, superficie_min=superficie_min, superficie_max=superficie_max,
+                search=search or None,
+            )
+    except OperationalError as exc:
+        return Response(
+            {'detail': f'Connexion impossible ({zone}) : {exc}'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    results = sort_results(results, ordering, columns)
+
+    total = len(results)
+    start = (page - 1) * page_size
+    page_data = results[start: start + page_size]
+
+    return Response({
+        'total':            total,
+        'page':             page,
+        'page_size':        page_size,
+        'columns':          columns,
+        'totals_by_statut': totals_by_statut,
+        'results':          page_data,
+    })
+
+
+@extend_schema(
+    tags=['Géoportail'],
+    summary='Export DTV (CSV / XLSX)',
+    description='Exporte les villages DTV (mêmes filtres que `dtv/villages/`, sans pagination).',
+    parameters=DTV_ATTR_PARAMETERS + [
+        OpenApiParameter('format', description='`csv` (défaut) ou `xlsx`', required=False),
+    ],
+    responses=EXPORT_RESPONSE,
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def geo_dtv_export(request, zone: str):
+    zone = zone.lower()
+    if zone not in VALID_ZONES:
+        return Response({'detail': f'Zone inconnue : {zone}'}, status=400)
+    fmt = (request.GET.get('format') or 'csv').strip().lower()
+    if fmt not in ('csv', 'xlsx'):
+        return Response({'detail': f'Format inconnu : {fmt}'}, status=400)
+
+    exact_filters = parse_exact_filters(request, EXACT_FILTERS_DTV)
+    q_statut = (request.GET.get('statut') or '').strip().upper()
+    superficie_eq, superficie_min, superficie_max = _parse_superficie_params(request)
+    search = (request.GET.get('search') or '').strip()
+
+    try:
+        with connections[_db_alias(zone)].cursor() as cursor:
+            schema_tables = filter_schema_tables_by_statut(discover_dtv_schema_tables(cursor), q_statut)
+            results, _, columns = fetch_attribute_rows(
+                cursor, schema_tables,
+                exact_filters=exact_filters,
+                superficie_eq=superficie_eq, superficie_min=superficie_min, superficie_max=superficie_max,
+                search=search or None,
+            )
+    except OperationalError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    return _export_response(results, columns, fmt, f'dtv_{zone}')
+
+
+@extend_schema(
+    tags=['Géoportail'],
+    summary='Statistiques DTV par statut (nombre + superficie)',
+    description=(
+        'Retourne, pour chaque statut DTV (`LEVE`, `PROV`, `EXISTANT`), le nombre de villages '
+        'et la superficie totale (ha) des territoires concernés.'
+    ),
+    parameters=DTV_ATTR_PARAMETERS,
+    responses=DTV_STATS_RESPONSE,
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def geo_dtv_stats(request, zone: str):
+    zone = zone.lower()
+    if zone not in VALID_ZONES:
+        return Response({'detail': f'Zone inconnue : {zone}'}, status=400)
+
+    exact_filters = parse_exact_filters(request, EXACT_FILTERS_DTV)
+    q_statut = (request.GET.get('statut') or '').strip().upper()
+    superficie_eq, superficie_min, superficie_max = _parse_superficie_params(request)
+    search = (request.GET.get('search') or '').strip()
+
+    try:
+        with connections[_db_alias(zone)].cursor() as cursor:
+            schema_tables = filter_schema_tables_by_statut(discover_dtv_schema_tables(cursor), q_statut)
+            stats = compute_stats(
+                cursor, schema_tables,
+                exact_filters=exact_filters,
+                superficie_eq=superficie_eq, superficie_min=superficie_min, superficie_max=superficie_max,
+                search=search or None,
+            )
+    except OperationalError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    return Response({
+        'zone':  zone,
+        'stats': [
+            {
+                'statut':               s,
+                'nb_villages':          stats.get(s, {}).get('nb', 0),
+                'superficie_totale_ha': round(stats.get(s, {}).get('superficie_ha', 0.0), 2),
+            }
+            for s in DTV_STATUTS
+        ],
+    })
+
+
+@extend_schema(
+    tags=['Géoportail'],
+    summary='Résumé global (sous-préfectures, CF, DTV)',
+    description=(
+        'Retourne les compteurs et superficies globales pour la carte « Résumé » du géoportail : '
+        'nombre de sous-préfectures, nombre + superficie totale des parcelles CF, nombre + '
+        'superficie totale des villages DTV. Accepte les mêmes filtres que `cf/parcelles/` / '
+        '`dtv/villages/` pour rester cohérent avec les filtres actifs côté frontend.'
+    ),
+    parameters=[OpenApiParameter('zone', location='path', description='`cavally` ou `worodougou`')] + CF_ATTR_PARAMETERS[1:],
+    responses={
+        200: {
+            'type': 'object',
+            'properties': {
+                'zone':             {'type': 'string'},
+                'sous_prefectures': {'type': 'object', 'properties': {'nb': {'type': 'integer'}}},
+                'cf':  {'type': 'object', 'properties': {'nb': {'type': 'integer'}, 'superficie_totale_ha': {'type': 'number'}}},
+                'dtv': {'type': 'object', 'properties': {'nb': {'type': 'integer'}, 'superficie_totale_ha': {'type': 'number'}}},
+            },
+        },
+        400: {'description': 'Zone inconnue'},
+        503: {'description': 'Connexion PostGIS impossible'},
+    },
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def geo_resume(request, zone: str):
+    zone = zone.lower()
+    if zone not in VALID_ZONES:
+        return Response({'detail': f'Zone inconnue : {zone}'}, status=400)
+
+    exact_filters_cf  = parse_exact_filters(request, EXACT_FILTERS_CF)
+    exact_filters_dtv = parse_exact_filters(request, EXACT_FILTERS_DTV)
+    q_statut = (request.GET.get('statut') or '').strip().upper()
+    superficie_eq, superficie_min, superficie_max = _parse_superficie_params(request)
+    search = (request.GET.get('search') or '').strip()
+
+    try:
+        with connections[_db_alias(zone)].cursor() as cursor:
+            sp_schema_tables = []
+            for t in SOUS_PREFECTURE_TABLES:
+                if _table_exists(cursor, 'public', t):
+                    sp_schema_tables.append(('public', t))
+            nb_sous_prefectures = 0
+            for sch, tbl in sp_schema_tables:
+                try:
+                    cursor.execute(f'SELECT COUNT(*) FROM "{sch}"."{tbl}"')
+                    nb_sous_prefectures += cursor.fetchone()[0]
+                except Exception:
+                    pass
+
+            cf_schema_tables  = filter_schema_tables_by_statut(discover_cf_schema_tables(cursor), q_statut)
+            dtv_schema_tables = filter_schema_tables_by_statut(discover_dtv_schema_tables(cursor), q_statut)
+
+            cf_stats = compute_stats(
+                cursor, cf_schema_tables,
+                exact_filters=exact_filters_cf,
+                superficie_eq=superficie_eq, superficie_min=superficie_min, superficie_max=superficie_max,
+                search=search or None,
+            )
+            dtv_stats = compute_stats(
+                cursor, dtv_schema_tables,
+                exact_filters=exact_filters_dtv,
+                superficie_eq=superficie_eq, superficie_min=superficie_min, superficie_max=superficie_max,
+                search=search or None,
+            )
+    except OperationalError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    cf_nb    = sum(v['nb'] for v in cf_stats.values())
+    cf_ha    = sum(v['superficie_ha'] for v in cf_stats.values())
+    dtv_nb   = sum(v['nb'] for v in dtv_stats.values())
+    dtv_ha   = sum(v['superficie_ha'] for v in dtv_stats.values())
+
+    return Response({
+        'zone': zone,
+        'sous_prefectures': {'nb': nb_sous_prefectures},
+        'cf':  {'nb': cf_nb, 'superficie_totale_ha': round(cf_ha, 2)},
+        'dtv': {'nb': dtv_nb, 'superficie_totale_ha': round(dtv_ha, 2)},
+    })
+
+
+# ---------------------------------------------------------------------------
+# Introspection des tables (debug)
+# ---------------------------------------------------------------------------
 
 @extend_schema(
     tags=['Géoportail'],

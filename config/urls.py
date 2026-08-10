@@ -69,4 +69,5 @@ urlpatterns = [
     path('api/rapports/',    include('apps.rapports.urls')),
     path('api/terrain/',     include('apps.terrain.urls')),
     path('api/geo/',         include('apps.geo.urls')),
+    path('api/publicite/',   include('apps.publicite.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

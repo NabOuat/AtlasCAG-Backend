@@ -14,8 +14,8 @@ from .serializers import RapportSerializer
         ),
         parameters=[
             OpenApiParameter('zone',         description='ID de la zone', required=False),
-            OpenApiParameter('type_rapport', description='`HEBDOMADAIRE`, `MENSUEL`, `TRIMESTRIEL`, `ANNUEL`', required=False),
-            OpenApiParameter('statut',       description='`BROUILLON`, `VALIDE`, `PUBLIE`', required=False),
+            OpenApiParameter('type_rapport', description='`MENSUEL`, `TRIMESTRIEL`, `ANNUEL`', required=False),
+            OpenApiParameter('statut',       description='`BROUILLON`, `FINALISE`, `ENVOYE`', required=False),
             OpenApiParameter('periode',      description='Période au format YYYY-MM (ex: 2026-07)', required=False),
         ],
     ),
