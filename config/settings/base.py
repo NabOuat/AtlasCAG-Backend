@@ -31,6 +31,7 @@ INSTALLED_APPS = [
     'apps.rapports',
     'apps.terrain',
     'apps.publicite',
+    'apps.dbguard',
 ]
 
 MIDDLEWARE = [
