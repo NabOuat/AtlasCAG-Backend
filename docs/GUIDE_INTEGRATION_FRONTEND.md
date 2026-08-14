@@ -9,8 +9,9 @@ Il est organisé selon les 4 sections du cahier des charges :
 3. [Module CF — table attributaire](#3-module-cf--table-attributaire)
 4. [Module DTV — table attributaire](#4-module-dtv--table-attributaire)
 5. [Workflow de publicité — migration de couches](#5-workflow-de-publicité--migration-de-couches)
-6. [Référentiel — statut DTV renommé](#6-référentiel--statut-dtv-renommé)
-7. [Récapitulatif de tous les endpoints](#7-récapitulatif)
+6. [Suivi CF — dossiers, import ADS et vagues d'envoi](#6-suivi-cf--dossiers-import-ads-et-vagues-denvoi)
+7. [Référentiel — statut DTV renommé](#7-référentiel--statut-dtv-renommé)
+8. [Récapitulatif de tous les endpoints](#8-récapitulatif)
 
 Base URL : `/api/`. Toutes les routes ci-dessous nécessitent l'en-tête
 `Authorization: Bearer <access_token>`, sauf mention contraire.
@@ -367,7 +368,94 @@ Inclut aussi les tentatives échouées (`succes: false` avec `message_erreur`)
 
 ---
 
-## 6. Référentiel — statut DTV renommé
+## 6. Suivi CF — dossiers, import ADS et vagues d'envoi
+
+Distinct du module Géoportail (§3) : ceci pilote le **suivi administratif** des dossiers CF
+(`Dossier`, app `dossiers`) — statut, statut_cf, vague d'envoi — pas l'affichage cartographique.
+Branché sur la page **Traitement CF** déjà présente dans la navigation par zone.
+
+### 6.1 Liste des dossiers CF
+
+```
+GET /api/dossiers/suivi-cf/
+```
+
+**Filtres :** `zone` (id numérique de la zone référentiel — pas le slug `cavally`/`worodougou` de
+l'app `geo`, voir note ci-dessous), `statut` (`EN_COURS`, `VALIDE`, `REJETE`, `ARCHIVE`, `ANNULE`),
+`statut_cf` (`LEVE`, `PROV`, `EN_PUBLICITE`, `APRES_PUBLICITE`, `DEF`, `APPROUVE`, `VALIDE`, `REJETE`),
+`vague_envoi` (id), `search` (numéro de dossier, village, demandeur ou num_demand).
+
+**Réponse (pagination DRF standard) :**
+```json
+{
+  "count": 42,
+  "results": [
+    {
+      "id": 7, "numero_dossier": "CF-2026-007", "village": 3, "village_nom": "Gbapleu",
+      "zone": 1, "zone_nom": "Cavally", "statut": "EN_COURS", "statut_cf": "EN_PUBLICITE",
+      "vague_envoi": 2, "vague_envoi_nom": "Vague Juillet 2026",
+      "num_demand": "CF-2024-00123", "nom_demandeur": "Kouassi Jean",
+      "superficie_parcelle": 4.32, "perimetre_parcelle": 812.5,
+      "nom_ota": "SCCARTO", "n_demcge": "CGE-001",
+      "cree_le": "2026-08-10T09:00:00Z", "modifie_le": "2026-08-14T17:00:00Z",
+      "cree_par": 1, "cree_par_nom": "Admin AtlasCAG"
+    }
+  ]
+}
+```
+
+> **Note zone** : `/api/dossiers/suivi-cf/` filtre par l'`id` numérique du référentiel
+> (`GET /api/referentiel/zones/`), alors que `/api/geo/{zone}/...` utilise le slug
+> `cavally`/`worodougou`. Ce sont deux conventions différentes préexistantes dans l'API — résoudre
+> l'id via `getZones()` et faire correspondre `zone.nom` au slug de zone courant.
+
+```
+POST  /api/dossiers/suivi-cf/            Créer un dossier CF
+PATCH /api/dossiers/suivi-cf/{id}/       Modifier un dossier CF
+```
+
+### 6.2 Import en masse — fichier ADS
+
+```
+POST /api/dossiers/suivi-cf/import-ads/
+Content-Type: multipart/form-data
+Champs : fichier (.xlsx ou .csv), zone (id numérique, requis)
+```
+
+Colonnes reconnues dans le fichier (en-têtes insensibles à la casse) : `numero_dossier`
+(obligatoire, clé d'upsert), `village` (obligatoire à la création), `sous_prefecture` (optionnel,
+désambiguïse un nom de village dupliqué dans la zone), `num_demand`, `nom_demandeur`,
+`superficie_parcelle`, `perimetre_parcelle`, `nom_ota`, `n_demcge`, `statut_cf` (optionnel).
+
+Chaque ligne est traitée indépendamment — une ligne en erreur n'empêche pas l'import des
+suivantes. Le fichier n'est pas conservé côté serveur (traitement en mémoire uniquement).
+
+**Réponse :**
+```json
+{
+  "total_rows": 42, "created": 38, "updated": 3,
+  "errors": [
+    { "row": 12, "numero_dossier": "CF-2026-012", "message": "Village 'Xyz' introuvable dans la zone Cavally." }
+  ]
+}
+```
+
+### 6.3 Vagues d'envoi
+
+```
+GET  /api/dossiers/vagues/            Liste (filtres : zone, type_dossier)
+POST /api/dossiers/vagues/            Créer une vague
+```
+
+Réponse d'un élément :
+```json
+{ "id": 2, "nom": "Vague Juillet 2026", "date": "2026-07-15", "libelle": "",
+  "zone": 1, "zone_nom": "Cavally", "type_dossier": "CF", "cree_le": "2026-07-15T08:00:00Z" }
+```
+
+---
+
+## 7. Référentiel — statut DTV renommé
 
 Cahier des charges §1.1 : le badge "Délimité" doit disparaître, remplacé par
 "Existant", partout où un statut DTV est affiché.
@@ -387,7 +475,7 @@ globale conseillée sur ces deux termes).
 
 ---
 
-## 7. Récapitulatif
+## 8. Récapitulatif
 
 | Endpoint | Méthode | Usage |
 |---|---|---|
@@ -408,6 +496,10 @@ globale conseillée sur ces deux termes).
 | `/api/publicite/dossiers/{id}/rejeter/` | POST | Transition EN_PUBLICITE → REJETE |
 | `/api/publicite/dossiers/{id}/valider/` | POST | Transition APPROUVE → VALIDE |
 | `/api/publicite/dossiers/{id}/historique/` | GET | Historique des migrations de couches |
+| `/api/dossiers/suivi-cf/` | GET/POST | Liste / création — suivi administratif CF (§6.1) |
+| `/api/dossiers/suivi-cf/{id}/` | PATCH | Modifier un dossier CF |
+| `/api/dossiers/suivi-cf/import-ads/` | POST | Import Excel/CSV en masse (§6.2) |
+| `/api/dossiers/vagues/` | GET/POST | Vagues d'envoi (§6.3) |
 | `/api/referentiel/villages/` | GET | Villages + avancement DTV (`etape=EXISTANT` etc.) |
 | `/api/referentiel/villages/stats_dtv/` | GET | Compteurs DTV (clé `existant`) |
 
