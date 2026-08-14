@@ -28,11 +28,14 @@ class DbguardConfig(AppConfig):
         if command in _SKIP_COMMANDS:
             return
 
-        # Sous `runserver`, Django relance le process une fois pour l'auto-reload ;
-        # RUN_MAIN n'est présent QUE dans le sous-process qui sert réellement les requêtes.
-        # Hors runserver (gunicorn, etc.), RUN_MAIN n'est jamais défini — la vérification
-        # s'exécute alors normalement au premier (et unique) démarrage du process.
-        if 'runserver' in argv and os.environ.get('RUN_MAIN') != 'true':
+        # Sous `runserver` AVEC auto-reload (comportement par défaut), Django relance le
+        # process une fois ; RUN_MAIN n'est présent QUE dans le sous-process qui sert
+        # réellement les requêtes — on ignore le process parent pour ne pas dupliquer.
+        # Avec `--noreload`, Django ne repasse jamais par ce mécanisme et ne définit donc
+        # jamais RUN_MAIN : il ne faut PAS ignorer ce cas (sinon la vérification ne se
+        # déclenche jamais du tout en --noreload). Hors runserver (gunicorn, etc.), RUN_MAIN
+        # n'est jamais défini non plus — la vérification s'exécute normalement.
+        if 'runserver' in argv and '--noreload' not in argv and os.environ.get('RUN_MAIN') != 'true':
             return
 
         from django.core.management import call_command

@@ -133,8 +133,15 @@ class Command(BaseCommand):
             if not getattr(field, 'choices', None):
                 continue
             expected = {str(c[0]) for c in field.choices}
+            column_pattern = re.compile(
+                r'(?<![A-Za-z0-9_"])"?' + re.escape(field.column) + r'"?(?![A-Za-z0-9_])'
+            )
             for conname, condef in check_constraints:
-                if f'"{field.column}"' not in condef and field.column not in condef:
+                # Correspondance sur le nom de colonne complet (limites de mot), jamais une
+                # simple sous-chaîne — sinon un champ "statut" matcherait aussi la contrainte
+                # d'un champ "statut_cf" (bug réel rencontré : substring 'statut' présent dans
+                # 'statut_cf', qui écrasait la mauvaise contrainte).
+                if not column_pattern.search(condef):
                     continue
                 found = set(re.findall(r"'([^']*)'::character varying", condef))
                 if not found:
