@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Zone, Region, SousPrefecture, Village
+from .models import Zone, Region, Departement, SousPrefecture, Village
 
 
 class ZoneSerializer(serializers.ModelSerializer):
@@ -14,12 +14,30 @@ class RegionSerializer(serializers.ModelSerializer):
         fields = ['id', 'nom', 'code']
 
 
+class DepartementSerializer(serializers.ModelSerializer):
+    region_nom = serializers.CharField(source='region.nom', read_only=True)
+
+    class Meta:
+        model  = Departement
+        fields = ['id', 'nom', 'region', 'region_nom']
+
+
 class SousPrefectureSerializer(serializers.ModelSerializer):
     departement_nom = serializers.CharField(source='departement.nom', read_only=True)
 
     class Meta:
         model  = SousPrefecture
         fields = ['id', 'nom', 'departement', 'departement_nom']
+
+
+class VillageWriteSerializer(serializers.ModelSerializer):
+    """Serializer de création/modification — champs réels du modèle uniquement (les champs
+    d'avancement DTV exposés par `VillageListSerializer` sont dérivés de la relation `dtv`,
+    pas des colonnes de `Village`, donc non pertinents ici)."""
+
+    class Meta:
+        model  = Village
+        fields = ['id', 'nom', 'sous_prefecture', 'sous_prefecture_fk', 'zone', 'latitude', 'longitude']
 
 
 class VillageListSerializer(serializers.ModelSerializer):

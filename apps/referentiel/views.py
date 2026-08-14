@@ -2,25 +2,34 @@ from rest_framework import viewsets, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter
-from .models import Zone, Region, Village
-from .serializers import ZoneSerializer, RegionSerializer, VillageListSerializer
+from apps.accounts.permissions import IsAdminOuChefProjet
+from .models import Zone, Region, Departement, SousPrefecture, Village
+from .serializers import (
+    ZoneSerializer, RegionSerializer, DepartementSerializer,
+    SousPrefectureSerializer, VillageListSerializer, VillageWriteSerializer,
+)
 
 
 @extend_schema_view(
     list=extend_schema(
         tags=['Référentiel'],
         summary='Liste des zones',
-        description='Retourne les deux zones opérationnelles : **Cavally** et **Worodougou**.',
+        description='Retourne les zones opérationnelles (ex. Cavally, Worodougou).',
     ),
-    retrieve=extend_schema(
+    retrieve=extend_schema(tags=['Référentiel'], summary='Détail d\'une zone'),
+    create=extend_schema(
         tags=['Référentiel'],
-        summary='Détail d\'une zone',
+        summary='Créer une zone',
+        description='Réservé aux profils Administrateur et Chef de Projet.',
     ),
+    update=extend_schema(tags=['Référentiel'], summary='Modifier une zone (réservé Admin/Chef de Projet)'),
+    partial_update=extend_schema(tags=['Référentiel'], summary='Modifier une zone (partiel, réservé Admin/Chef de Projet)'),
+    destroy=extend_schema(tags=['Référentiel'], summary='Supprimer une zone (réservé Admin/Chef de Projet)'),
 )
-class ZoneViewSet(viewsets.ReadOnlyModelViewSet):
+class ZoneViewSet(viewsets.ModelViewSet):
     queryset           = Zone.objects.all().order_by('nom')
     serializer_class   = ZoneSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsAdminOuChefProjet]
 
 
 @extend_schema_view(
@@ -29,15 +38,76 @@ class ZoneViewSet(viewsets.ReadOnlyModelViewSet):
         summary='Liste des régions',
         description='Retourne toutes les régions administratives couvertes par l\'AFOR.',
     ),
-    retrieve=extend_schema(
+    retrieve=extend_schema(tags=['Référentiel'], summary='Détail d\'une région'),
+    create=extend_schema(
         tags=['Référentiel'],
-        summary='Détail d\'une région',
+        summary='Créer une région',
+        description='Réservé aux profils Administrateur et Chef de Projet.',
     ),
+    update=extend_schema(tags=['Référentiel'], summary='Modifier une région (réservé Admin/Chef de Projet)'),
+    partial_update=extend_schema(tags=['Référentiel'], summary='Modifier une région (partiel, réservé Admin/Chef de Projet)'),
+    destroy=extend_schema(tags=['Référentiel'], summary='Supprimer une région (réservé Admin/Chef de Projet)'),
 )
-class RegionViewSet(viewsets.ReadOnlyModelViewSet):
+class RegionViewSet(viewsets.ModelViewSet):
     queryset           = Region.objects.all().order_by('nom')
     serializer_class   = RegionSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsAdminOuChefProjet]
+
+
+@extend_schema_view(
+    list=extend_schema(
+        tags=['Référentiel'],
+        summary='Liste des départements',
+        description='Filtrable par région.',
+        parameters=[OpenApiParameter('region', description='ID de la région', required=False)],
+    ),
+    retrieve=extend_schema(tags=['Référentiel'], summary='Détail d\'un département'),
+    create=extend_schema(
+        tags=['Référentiel'],
+        summary='Créer un département',
+        description='Réservé aux profils Administrateur et Chef de Projet.',
+    ),
+    update=extend_schema(tags=['Référentiel'], summary='Modifier un département (réservé Admin/Chef de Projet)'),
+    partial_update=extend_schema(tags=['Référentiel'], summary='Modifier un département (partiel, réservé Admin/Chef de Projet)'),
+    destroy=extend_schema(tags=['Référentiel'], summary='Supprimer un département (réservé Admin/Chef de Projet)'),
+)
+class DepartementViewSet(viewsets.ModelViewSet):
+    serializer_class   = DepartementSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdminOuChefProjet]
+
+    def get_queryset(self):
+        qs     = Departement.objects.select_related('region').order_by('nom')
+        region = self.request.query_params.get('region')
+        if region: qs = qs.filter(region__id=region)
+        return qs
+
+
+@extend_schema_view(
+    list=extend_schema(
+        tags=['Référentiel'],
+        summary='Liste des sous-préfectures',
+        description='Filtrable par département.',
+        parameters=[OpenApiParameter('departement', description='ID du département', required=False)],
+    ),
+    retrieve=extend_schema(tags=['Référentiel'], summary='Détail d\'une sous-préfecture'),
+    create=extend_schema(
+        tags=['Référentiel'],
+        summary='Créer une sous-préfecture',
+        description='Réservé aux profils Administrateur et Chef de Projet.',
+    ),
+    update=extend_schema(tags=['Référentiel'], summary='Modifier une sous-préfecture (réservé Admin/Chef de Projet)'),
+    partial_update=extend_schema(tags=['Référentiel'], summary='Modifier une sous-préfecture (partiel, réservé Admin/Chef de Projet)'),
+    destroy=extend_schema(tags=['Référentiel'], summary='Supprimer une sous-préfecture (réservé Admin/Chef de Projet)'),
+)
+class SousPrefectureViewSet(viewsets.ModelViewSet):
+    serializer_class   = SousPrefectureSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdminOuChefProjet]
+
+    def get_queryset(self):
+        qs          = SousPrefecture.objects.select_related('departement').order_by('nom')
+        departement = self.request.query_params.get('departement')
+        if departement: qs = qs.filter(departement__id=departement)
+        return qs
 
 
 @extend_schema_view(
@@ -62,10 +132,23 @@ class RegionViewSet(viewsets.ReadOnlyModelViewSet):
         tags=['Référentiel'],
         summary='Détail d\'un village',
     ),
+    create=extend_schema(
+        tags=['Référentiel'],
+        summary='Créer un village',
+        description='Réservé aux profils Administrateur et Chef de Projet. Champs réels uniquement (pas d\'avancement DTV — géré séparément).',
+        request=VillageWriteSerializer,
+    ),
+    update=extend_schema(tags=['Référentiel'], summary='Modifier un village (réservé Admin/Chef de Projet)', request=VillageWriteSerializer),
+    partial_update=extend_schema(tags=['Référentiel'], summary='Modifier un village (partiel, réservé Admin/Chef de Projet)', request=VillageWriteSerializer),
+    destroy=extend_schema(tags=['Référentiel'], summary='Supprimer un village (réservé Admin/Chef de Projet)'),
 )
-class VillageViewSet(viewsets.ReadOnlyModelViewSet):
-    serializer_class   = VillageListSerializer
-    permission_classes = [permissions.IsAuthenticated]
+class VillageViewSet(viewsets.ModelViewSet):
+    permission_classes = [permissions.IsAuthenticated, IsAdminOuChefProjet]
+
+    def get_serializer_class(self):
+        if self.action in ('create', 'update', 'partial_update'):
+            return VillageWriteSerializer
+        return VillageListSerializer
 
     def get_queryset(self):
         qs    = Village.objects.select_related('zone', 'sous_prefecture_fk', 'dtv').order_by('nom')

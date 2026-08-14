@@ -3,6 +3,7 @@ from rest_framework import viewsets, permissions
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter
 from .models import Utilisateur
+from .permissions import IsAdminOuChefProjet
 from .serializers import (
     UtilisateurMeSerializer,
     UtilisateurListSerializer,
@@ -46,27 +47,27 @@ class MeView(APIView):
     create=extend_schema(
         tags=['Comptes'],
         summary='Créer un utilisateur',
-        description='Crée un nouveau compte. Le mot de passe est haché automatiquement.',
+        description='Réservé aux profils Administrateur et Chef de Projet. Le mot de passe est haché automatiquement.',
         request=UtilisateurCreateSerializer,
     ),
     update=extend_schema(
         tags=['Comptes'],
-        summary='Modifier un utilisateur (remplacement complet)',
+        summary='Modifier un utilisateur (remplacement complet, réservé Admin/Chef de Projet)',
         request=UtilisateurUpdateSerializer,
     ),
     partial_update=extend_schema(
         tags=['Comptes'],
-        summary='Modifier un utilisateur (partiel)',
+        summary='Modifier un utilisateur (partiel, réservé Admin/Chef de Projet)',
         description='Met à jour un ou plusieurs champs d\'un compte sans toucher aux autres.',
         request=UtilisateurUpdateSerializer,
     ),
     destroy=extend_schema(
         tags=['Comptes'],
-        summary='Supprimer un utilisateur',
+        summary='Supprimer un utilisateur (réservé Admin/Chef de Projet)',
     ),
 )
 class UtilisateurViewSet(viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsAdminOuChefProjet]
     queryset = Utilisateur.objects.all().order_by('last_name', 'first_name')
 
     def get_serializer_class(self):

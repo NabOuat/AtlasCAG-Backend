@@ -28,6 +28,7 @@ class Utilisateur(AbstractBaseUser, PermissionsMixin):
         ('SIFOR_SENIOR', 'SIFOR Senior'),
         ('RAF',          'Responsable Administratif et Financier'),
         ('CHEF_PROJET',  'Chef de Projet'),
+        ('ADMIN',        'Administrateur'),
     ]
 
     username    = models.CharField(max_length=150, unique=True)
