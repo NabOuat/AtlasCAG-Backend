@@ -1,8 +1,26 @@
 from rest_framework import serializers
+from apps.dossiers.models import Dossier
 from .models import FichierDossier, FichierExcelPublicite
 
 
+class DossierPKOuCodeField(serializers.PrimaryKeyRelatedField):
+    """Accepte en écriture soit l'ID numérique (clé primaire) du dossier, soit son
+    `numero_dossier` (code métier, ex. `088-001-000011`) — c'est ce code que connaissent les
+    utilisateurs sur le terrain, pas l'ID technique interne, donc le frontend l'envoie tel quel
+    plutôt que de faire une recherche préalable pour résoudre l'ID."""
+
+    def to_internal_value(self, data):
+        if isinstance(data, str) and not data.strip().isdigit():
+            code = data.strip()
+            try:
+                return self.get_queryset().get(numero_dossier=code)
+            except Dossier.DoesNotExist:
+                self.fail('does_not_exist', pk_value=f'numero_dossier={code}')
+        return super().to_internal_value(data)
+
+
 class FichierDossierSerializer(serializers.ModelSerializer):
+    dossier           = DossierPKOuCodeField(queryset=Dossier.objects.all())
     dossier_numero    = serializers.CharField(source='dossier.numero_dossier', read_only=True)
     village_id        = serializers.IntegerField(source='dossier.village_id', read_only=True)
     village_nom       = serializers.CharField(source='dossier.village.nom', read_only=True)
