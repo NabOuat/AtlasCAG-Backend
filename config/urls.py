@@ -15,10 +15,13 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 
+import re
+
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, re_path, include
 from django.conf import settings
-from django.conf.urls.static import static
+from django.views.decorators.clickjacking import xframe_options_exempt
+from django.views.static import serve as serve_static
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
 from drf_spectacular.utils import extend_schema
@@ -68,6 +71,22 @@ urlpatterns = [
     path('api/stats/',       include('apps.stats.urls')),
     path('api/rapports/',    include('apps.rapports.urls')),
     path('api/terrain/',     include('apps.terrain.urls')),
+    path('api/planning-bureau/', include('apps.bureau.urls')),
     path('api/geo/',         include('apps.geo.urls')),
     path('api/publicite/',   include('apps.publicite.urls')),
-] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+]
+
+# Fichiers media (plans PDF, etc.) — servis uniquement en DEBUG, comme le fait le helper
+# `django.conf.urls.static.static` habituel. Exemptés de X-Frame-Options (par défaut 'DENY'
+# depuis Django 6, appliqué globalement par XFrameOptionsMiddleware à toute réponse, y compris
+# les fichiers statiques) : ces PDF doivent pouvoir s'afficher dans un <iframe> intégré
+# (module Contrôle Qualité), ce que 'DENY' bloque inconditionnellement même en same-origin.
+# Le reste de l'application (API JSON, admin) garde le comportement strict par défaut.
+if settings.DEBUG:
+    urlpatterns += [
+        re_path(
+            r'^%s(?P<path>.*)$' % re.escape(settings.MEDIA_URL.lstrip('/')),
+            xframe_options_exempt(serve_static),
+            {'document_root': settings.MEDIA_ROOT},
+        ),
+    ]

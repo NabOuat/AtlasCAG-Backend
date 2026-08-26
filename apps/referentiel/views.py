@@ -1,6 +1,7 @@
-from rest_framework import viewsets, permissions
+from rest_framework import status, viewsets, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter
 from apps.accounts.permissions import IsAdminOuChefProjet
 from .models import Zone, Region, Departement, SousPrefecture, Village
@@ -8,6 +9,7 @@ from .serializers import (
     ZoneSerializer, RegionSerializer, DepartementSerializer,
     SousPrefectureSerializer, VillageListSerializer, VillageWriteSerializer,
 )
+from .services import ImportHierarchieError, importer_hierarchie
 
 
 @extend_schema_view(
@@ -36,7 +38,12 @@ class ZoneViewSet(viewsets.ModelViewSet):
     list=extend_schema(
         tags=['Référentiel'],
         summary='Liste des régions',
-        description='Retourne toutes les régions administratives couvertes par l\'AFOR.',
+        description=(
+            'Retourne toutes les régions administratives couvertes par l\'AFOR. '
+            'Filtrable par zone opérationnelle (une région appartient à la zone du même nom — '
+            'cf. ImportHierarchieView).'
+        ),
+        parameters=[OpenApiParameter('zone', description='ID de la zone opérationnelle', required=False)],
     ),
     retrieve=extend_schema(tags=['Référentiel'], summary='Détail d\'une région'),
     create=extend_schema(
@@ -49,17 +56,27 @@ class ZoneViewSet(viewsets.ModelViewSet):
     destroy=extend_schema(tags=['Référentiel'], summary='Supprimer une région (réservé Admin/Chef de Projet)'),
 )
 class RegionViewSet(viewsets.ModelViewSet):
-    queryset           = Region.objects.all().order_by('nom')
     serializer_class   = RegionSerializer
     permission_classes = [permissions.IsAuthenticated, IsAdminOuChefProjet]
+
+    def get_queryset(self):
+        qs   = Region.objects.all().order_by('nom')
+        zone = self.request.query_params.get('zone')
+        if zone:
+            zone_obj = Zone.objects.filter(id=zone).first()
+            qs = qs.filter(nom__iexact=zone_obj.nom) if zone_obj else qs.none()
+        return qs
 
 
 @extend_schema_view(
     list=extend_schema(
         tags=['Référentiel'],
         summary='Liste des départements',
-        description='Filtrable par région.',
-        parameters=[OpenApiParameter('region', description='ID de la région', required=False)],
+        description='Filtrable par région et/ou par zone opérationnelle (cf. RegionViewSet).',
+        parameters=[
+            OpenApiParameter('region', description='ID de la région', required=False),
+            OpenApiParameter('zone',   description='ID de la zone opérationnelle', required=False),
+        ],
     ),
     retrieve=extend_schema(tags=['Référentiel'], summary='Détail d\'un département'),
     create=extend_schema(
@@ -78,7 +95,11 @@ class DepartementViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs     = Departement.objects.select_related('region').order_by('nom')
         region = self.request.query_params.get('region')
+        zone   = self.request.query_params.get('zone')
         if region: qs = qs.filter(region__id=region)
+        if zone:
+            zone_obj = Zone.objects.filter(id=zone).first()
+            qs = qs.filter(region__nom__iexact=zone_obj.nom) if zone_obj else qs.none()
         return qs
 
 
@@ -205,3 +226,68 @@ class VillageViewSet(viewsets.ModelViewSet):
             'pub_cloturee':   qs.filter(dtv__publicite_cloturee=True).count(),
             'non_demarre':    qs.filter(dtv__recueil_historique_fait=False).count(),
         })
+
+
+IMPORT_HIERARCHIE_RESPONSE = {
+    200: {
+        'type': 'object',
+        'properties': {
+            'total_rows':               {'type': 'integer'},
+            'dry_run':                  {'type': 'boolean'},
+            'regions_crees':            {'type': 'integer'},
+            'regions_maj':              {'type': 'integer'},
+            'departements_crees':       {'type': 'integer'},
+            'departements_maj':         {'type': 'integer'},
+            'sous_prefectures_creees':  {'type': 'integer'},
+            'sous_prefectures_maj':     {'type': 'integer'},
+            'villages_crees':           {'type': 'integer'},
+            'villages_maj':             {'type': 'integer'},
+            'errors': {
+                'type': 'array',
+                'items': {'type': 'object', 'properties': {
+                    'row': {'type': 'integer'}, 'village': {'type': 'string'}, 'message': {'type': 'string'},
+                }},
+            },
+        },
+    },
+    400: {'description': "Fichier illisible ou colonnes obligatoires absentes de l'en-tête"},
+}
+
+
+@extend_schema(
+    tags=['Référentiel'],
+    summary='Importer la hiérarchie Région → Département → Sous-préfecture → Village',
+    description=(
+        "Importe un fichier Excel/CSV (colonnes attendues : REGION, DEPARTEMENT, "
+        "SOUS-PREFECTURE, VILLAGE, et optionnellement CD_REG, CD_DPT, CD_SP, CD_VIL). "
+        "Chaque ligne crée ou complète la Région/le Département/la Sous-préfecture "
+        "correspondants (upsert par code si fourni, sinon par nom) ; le Village est en plus "
+        "rattaché à la Zone opérationnelle portant le nom de la région — si cette zone n'existe "
+        "pas encore, la ligne échoue (le village n'est pas créé) mais les niveaux "
+        "Région/Département/Sous-préfecture sont importés quand même. "
+        "Passer `?dry_run=true` pour obtenir un aperçu du résultat sans rien enregistrer "
+        "(l'import est exécuté normalement puis annulé)."
+    ),
+    parameters=[
+        OpenApiParameter('dry_run', description="'true' pour un aperçu sans écriture", required=False),
+    ],
+    request={'multipart/form-data': {'type': 'object', 'properties': {
+        'fichier': {'type': 'string', 'format': 'binary'},
+    }}},
+    responses=IMPORT_HIERARCHIE_RESPONSE,
+)
+class ImportHierarchieView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminOuChefProjet]
+
+    def post(self, request):
+        fichier = request.FILES.get('fichier')
+        if not fichier:
+            return Response({'detail': "Le champ 'fichier' est requis."}, status=status.HTTP_400_BAD_REQUEST)
+
+        dry_run = str(request.query_params.get('dry_run', '')).lower() in ('1', 'true', 'yes')
+        try:
+            resultat = importer_hierarchie(fichier, request.user, dry_run=dry_run)
+        except ImportHierarchieError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(resultat)

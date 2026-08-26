@@ -65,14 +65,18 @@ class SuiviCFSerializer(serializers.ModelSerializer):
     zone_nom         = serializers.CharField(source='zone.nom',    read_only=True)
     cree_par_nom     = serializers.SerializerMethodField()
     vague_envoi_nom  = serializers.CharField(source='vague_envoi.nom', read_only=True, default=None)
+    departement_nom          = serializers.SerializerMethodField()
+    sous_prefecture_nom      = serializers.SerializerMethodField()
+    controle_qualite_statut  = serializers.SerializerMethodField()
 
     class Meta:
         model  = Dossier
         fields = [
             'id', 'numero_dossier', 'village', 'village_nom', 'zone', 'zone_nom',
-            'statut', 'statut_cf', 'vague_envoi', 'vague_envoi_nom',
-            'num_demand', 'nom_demandeur', 'superficie_parcelle', 'perimetre_parcelle',
-            'nom_ota', 'n_demcge', 'cree_le', 'modifie_le', 'cree_par', 'cree_par_nom',
+            'departement_nom', 'sous_prefecture_nom', 'statut', 'statut_cf', 'statut_publicite',
+            'controle_qualite_statut', 'vague_envoi', 'vague_envoi_nom',
+            'num_demand', 'numero_parcelle', 'nom_demandeur', 'superficie_parcelle', 'perimetre_parcelle',
+            'nom_ota', 'n_demcge', 'nom_ce', 'observation', 'cree_le', 'modifie_le', 'cree_par', 'cree_par_nom',
         ]
 
     def get_cree_par_nom(self, obj) -> str | None:
@@ -80,12 +84,29 @@ class SuiviCFSerializer(serializers.ModelSerializer):
             return f'{obj.cree_par.first_name} {obj.cree_par.last_name}'.strip() or obj.cree_par.username
         return None
 
+    def get_departement_nom(self, obj) -> str | None:
+        sp = obj.village.sous_prefecture_fk
+        return sp.departement.nom if sp and sp.departement else None
+
+    def get_sous_prefecture_nom(self, obj) -> str | None:
+        # Même logique de repli que apps.referentiel.VillageListSerializer.get_sous_prefecture_nom :
+        # préfère la FK (donnée référentiel structurée) au texte libre legacy, qui peut diverger.
+        sp = obj.village.sous_prefecture_fk
+        return sp.nom if sp else obj.village.sous_prefecture
+
+    def get_controle_qualite_statut(self, obj) -> str | None:
+        # Résultat du contrôle qualité (apps.controle.ControleQualite) — indépendant du
+        # workflow métier (statut_publicite) : jamais l'un ne dérive de l'autre.
+        from apps.controle.models import ControleQualite
+        dernier = ControleQualite.objects.filter(dossier=obj).order_by('-cree_le').first()
+        return dernier.statut if dernier and dernier.statut in ('VALIDE', 'REJETE') else None
+
 
 class SuiviCFCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Dossier
         fields = [
             'numero_dossier', 'village', 'zone', 'statut', 'statut_cf', 'vague_envoi',
-            'num_demand', 'nom_demandeur', 'superficie_parcelle', 'perimetre_parcelle',
-            'nom_ota', 'n_demcge',
+            'num_demand', 'numero_parcelle', 'nom_demandeur', 'superficie_parcelle', 'perimetre_parcelle',
+            'nom_ota', 'n_demcge', 'nom_ce', 'observation',
         ]

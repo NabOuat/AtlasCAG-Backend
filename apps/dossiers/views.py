@@ -174,11 +174,13 @@ class VagueEnvoiViewSet(viewsets.ModelViewSet):
             'la source d\'affichage cartographique — cet endpoint sert le pilotage du workflow.'
         ),
         parameters=[
-            OpenApiParameter('zone',        description='ID de la zone', required=False),
-            OpenApiParameter('statut',      description='`EN_COURS`, `VALIDE`, `REJETE`, `ARCHIVE`, `ANNULE`', required=False),
-            OpenApiParameter('statut_cf',   description='`LEVE`, `PROV`, `EN_PUBLICITE`, `DEF`, `APPROUVE`, `VALIDE`, `REJETE`', required=False),
-            OpenApiParameter('vague_envoi', description='ID de la vague d\'envoi', required=False),
-            OpenApiParameter('search',      description='Recherche par numéro de dossier, village, demandeur ou num_demand', required=False),
+            OpenApiParameter('zone',         description='ID de la zone', required=False),
+            OpenApiParameter('statut',       description='`EN_COURS`, `VALIDE`, `REJETE`, `ARCHIVE`, `ANNULE`', required=False),
+            OpenApiParameter('statut_cf',    description='`LEVE`, `PROV`, `EN_PUBLICITE`, `DEF`, `APPROUVE`, `VALIDE`, `REJETE`', required=False),
+            OpenApiParameter('vague_envoi',  description='ID de la vague d\'envoi', required=False),
+            OpenApiParameter('en_publicite', description='`true` : ne retourne que les dossiers déjà rattachés à une vague d\'envoi (réellement passés par le module Publicité)', required=False),
+            OpenApiParameter('avec_resultat_qc', description='`true` : ne retourne que les dossiers ayant un résultat de contrôle qualité (Validé ou Rejeté) — indépendant de `vague_envoi`, un dossier peut avoir un contrôle qualité sans jamais être passé par un import Excel-publicité', required=False),
+            OpenApiParameter('search',       description='Recherche par numéro de dossier, village, demandeur ou num_demand', required=False),
         ],
     ),
     retrieve=extend_schema(tags=['Dossiers'], summary='Détail d\'un dossier CF (suivi)'),
@@ -197,15 +199,28 @@ class SuiviCFViewSet(viewsets.ModelViewSet):
             .select_related('village', 'zone', 'vague_envoi', 'cree_par')
             .order_by('-cree_le')
         )
-        zone        = self.request.query_params.get('zone')
-        statut      = self.request.query_params.get('statut')
-        statut_cf   = self.request.query_params.get('statut_cf')
-        vague_envoi = self.request.query_params.get('vague_envoi')
-        search      = self.request.query_params.get('search')
-        if zone:        qs = qs.filter(zone__id=zone)
-        if statut:      qs = qs.filter(statut=statut)
-        if statut_cf:   qs = qs.filter(statut_cf=statut_cf)
-        if vague_envoi: qs = qs.filter(vague_envoi__id=vague_envoi)
+        zone            = self.request.query_params.get('zone')
+        statut          = self.request.query_params.get('statut')
+        statut_cf       = self.request.query_params.get('statut_cf')
+        vague_envoi     = self.request.query_params.get('vague_envoi')
+        en_publicite    = self.request.query_params.get('en_publicite')
+        avec_resultat_qc = self.request.query_params.get('avec_resultat_qc')
+        search          = self.request.query_params.get('search')
+        if zone:         qs = qs.filter(zone__id=zone)
+        if statut:       qs = qs.filter(statut=statut)
+        if statut_cf:    qs = qs.filter(statut_cf=statut_cf)
+        if vague_envoi:  qs = qs.filter(vague_envoi__id=vague_envoi)
+        if en_publicite == 'true':
+            # Ne retourne que les dossiers réellement passés par un import Excel-publicité
+            # (rattachés à une vague) — exclut la masse des dossiers CF bruts (import ADS)
+            # jamais soumis au module Publicité.
+            qs = qs.filter(vague_envoi__isnull=False)
+        if avec_resultat_qc == 'true':
+            # Un contrôle qualité (apps.controle.ControleQualite) peut être réalisé sur n'importe
+            # quel dossier CF ayant un PDF attaché, indépendamment de `vague_envoi` — le contrôle
+            # qualité et le circuit administratif Excel-publicité sont deux choses distinctes.
+            # Ne garder que les dossiers dont le contrôle le plus récent a conclu Validé/Rejeté.
+            qs = qs.filter(controles__statut__in=['VALIDE', 'REJETE']).distinct()
         if search:
             qs = qs.filter(
                 Q(numero_dossier__icontains=search) | Q(village__nom__icontains=search)

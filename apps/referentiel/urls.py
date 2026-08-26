@@ -1,5 +1,9 @@
+from django.urls import path
 from rest_framework.routers import DefaultRouter
-from .views import ZoneViewSet, RegionViewSet, DepartementViewSet, SousPrefectureViewSet, VillageViewSet
+from .views import (
+    ZoneViewSet, RegionViewSet, DepartementViewSet, SousPrefectureViewSet, VillageViewSet,
+    ImportHierarchieView,
+)
 
 router = DefaultRouter()
 router.register('zones',            ZoneViewSet,            basename='zone')
@@ -8,4 +12,6 @@ router.register('departements',     DepartementViewSet,     basename='departemen
 router.register('sous-prefectures', SousPrefectureViewSet,  basename='sous-prefecture')
 router.register('villages',         VillageViewSet,         basename='village')
 
-urlpatterns = router.urls
+urlpatterns = router.urls + [
+    path('import-hierarchie/', ImportHierarchieView.as_view(), name='import-hierarchie'),
+]

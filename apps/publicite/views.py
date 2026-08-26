@@ -46,6 +46,7 @@ class _TransitionView(APIView):
 
     permission_classes = [IsAuthenticated]
     statut_attendu: str
+    statuts_acceptes: tuple = ()  # si vide, seul `statut_attendu` est accepté (voir plus bas)
     table_source: str
     table_cible: str
     nouveau_statut: str
@@ -56,7 +57,8 @@ class _TransitionView(APIView):
         except Dossier.DoesNotExist:
             return Response({'detail': 'Dossier introuvable.'}, status=status.HTTP_404_NOT_FOUND)
 
-        if dossier.statut_cf != self.statut_attendu:
+        acceptes = self.statuts_acceptes or (self.statut_attendu,)
+        if dossier.statut_cf not in acceptes:
             return Response(
                 {'detail': (
                     f"Transition impossible : statut_cf actuel = {dossier.statut_cf!r}, "
@@ -94,18 +96,20 @@ class _TransitionView(APIView):
     tags=['Publicité'],
     summary='Mettre un dossier CF en publicité',
     description=(
-        'Requiert `statut_cf == DEF`. Migre la parcelle (identifiée par `NUM_DEMAND`) de la '
-        'couche **CF – Définitif** vers **CF – En publicité**, puis passe `statut_cf` à '
-        '`EN_PUBLICITE`.'
+        'Requiert `statut_cf == DEF` (un dossier fraîchement chargé, sans `statut_cf` renseigné, '
+        'est considéré à l\'état initial — donc équivalent à `DEF` pour cette transition). Migre '
+        'la parcelle (identifiée par `NUM_DEMAND`) de la couche **CF – Définitif** vers '
+        '**CF – En publicité**, puis passe `statut_cf` à `EN_PUBLICITE`.'
     ),
     request=None,
     responses=TRANSITION_RESPONSE,
 )
 class MettreEnPubliciteView(_TransitionView):
-    statut_attendu = 'DEF'
-    table_source   = CF_DEF_TABLE
-    table_cible    = CF_EN_PUBLICITE_TABLE
-    nouveau_statut = 'EN_PUBLICITE'
+    statut_attendu   = 'DEF'
+    statuts_acceptes = (None, '', 'DEF')  # PDF nouvellement chargé = état initial = Définitif
+    table_source     = CF_DEF_TABLE
+    table_cible      = CF_EN_PUBLICITE_TABLE
+    nouveau_statut   = 'EN_PUBLICITE'
 
 
 @extend_schema(
