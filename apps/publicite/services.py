@@ -84,7 +84,10 @@ def migrer_parcelle(*, zone, dossier, table_source, table_cible, nouveau_statut,
     base spatiale de `zone`, puis met à jour `dossier.statut_cf`. Lève `MigrationError`
     sans modifier `dossier` si la migration spatiale échoue."""
     num_demand    = dossier.num_demand
-    ancien_statut = dossier.statut_cf
+    # `ancien_statut` est un CharField NOT NULL — un dossier fraîchement chargé (statut_cf vide,
+    # traité comme Définitif par MettreEnPubliciteView) doit donc être journalisé en chaîne vide,
+    # jamais en None, pour ne pas faire échouer l'écriture de l'historique.
+    ancien_statut = dossier.statut_cf or ''
     alias         = db_alias(zone)
     couche_source = couche_cible = ''
 
@@ -131,7 +134,8 @@ def migrer_parcelle(*, zone, dossier, table_source, table_cible, nouveau_statut,
     try:
         with transaction.atomic():
             dossier.statut_cf = nouveau_statut
-            dossier.save(update_fields=['statut_cf'])
+            dossier.statut_publicite = nouveau_statut
+            dossier.save(update_fields=['statut_cf', 'statut_publicite'])
             HistoriqueMigrationCouche.objects.create(
                 dossier=dossier, num_demand=num_demand,
                 ancien_statut=ancien_statut, nouveau_statut=nouveau_statut,

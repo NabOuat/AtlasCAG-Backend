@@ -27,11 +27,21 @@ class Region(models.Model):
 
 class Departement(models.Model):
     nom    = models.CharField(max_length=150)
+    code   = models.CharField(max_length=20, blank=True)  # CD_DPT (codification administrative)
     region = models.ForeignKey(Region, on_delete=models.RESTRICT, related_name='departements')
 
     class Meta:
         db_table        = 'departement'
-        unique_together = ('nom', 'region')
+        unique_together = [('nom', 'region')]
+        constraints = [
+            # `code` reste optionnel (création manuelle existante sans code) : la contrainte
+            # d'unicité ne s'applique donc qu'aux codes réellement renseignés, pour ne pas
+            # bloquer la coexistence de plusieurs départements sans code dans une même région.
+            models.UniqueConstraint(
+                fields=['code', 'region'], condition=~models.Q(code=''),
+                name='uniq_departement_code_region',
+            ),
+        ]
 
     def __str__(self):
         return self.nom
@@ -39,11 +49,18 @@ class Departement(models.Model):
 
 class SousPrefecture(models.Model):
     nom         = models.CharField(max_length=150)
+    code        = models.CharField(max_length=20, blank=True)  # CD_SP (codification administrative)
     departement = models.ForeignKey(Departement, on_delete=models.RESTRICT, related_name='sous_prefectures')
 
     class Meta:
         db_table        = 'sous_prefecture'
-        unique_together = ('nom', 'departement')
+        unique_together = [('nom', 'departement')]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['code', 'departement'], condition=~models.Q(code=''),
+                name='uniq_sousprefecture_code_departement',
+            ),
+        ]
 
     def __str__(self):
         return self.nom
@@ -53,6 +70,7 @@ class Village(models.Model):
     """Entité administrative pure — sans données de processus DTV."""
 
     nom                = models.CharField(max_length=150)
+    code               = models.CharField(max_length=20, blank=True)  # CD_VIL (codification administrative)
     sous_prefecture    = models.CharField(max_length=150)   # legacy VARCHAR
     sous_prefecture_fk = models.ForeignKey(
         SousPrefecture, null=True, blank=True,
@@ -66,6 +84,16 @@ class Village(models.Model):
     class Meta:
         db_table        = 'village'
         unique_together = ('nom', 'sous_prefecture', 'zone')
+        constraints = [
+            # NULL n'est jamais considéré égal à NULL par Postgres, donc les nombreux villages
+            # existants sans sous_prefecture_fk (legacy) ne sont jamais concernés par cette
+            # contrainte — seuls les villages effectivement rattachés à une SousPrefecture avec
+            # un code renseigné sont vérifiés.
+            models.UniqueConstraint(
+                fields=['code', 'sous_prefecture_fk'], condition=~models.Q(code=''),
+                name='uniq_village_code_sousprefecture',
+            ),
+        ]
 
     def __str__(self):
         return self.nom

@@ -52,6 +52,16 @@ class Dossier(models.Model):
         ('VALIDE',           'Validée'),
         ('REJETE',           'Rejeté'),
     ]
+    # Statut métier du workflow de publicité — distinct de `statut_cf` (qui encode la couche
+    # PostGIS physique de la parcelle). Synchronisé uniquement par apps.publicite.services et
+    # apps.dossiers.services.importer_excel_publicite ; jamais par apps.controle (le résultat
+    # du contrôle qualité, ControleQualite.statut, reste une information totalement séparée).
+    STATUT_PUBLICITE_CHOICES = [
+        ('EN_PUBLICITE', 'En publicité'),
+        ('APPROUVE',     'Approuvée'),
+        ('REJETE',       'Rejetée'),
+        ('VALIDE',       'Validée'),
+    ]
 
     # ── Identité ──────────────────────────────────────────
     numero_dossier = models.CharField(max_length=50, unique=True, db_index=True)
@@ -72,18 +82,25 @@ class Dossier(models.Model):
 
     # ── Données CF (Certificat Foncier Rural) ─────────────
     num_demand          = models.CharField(max_length=50,  blank=True)  # NUM_DEMAND QGIS
+    numero_parcelle     = models.CharField(max_length=50,  blank=True)  # N° PARCELLE
     nom_demandeur       = models.CharField(max_length=150, blank=True)  # NOM_DEM
     superficie_parcelle = models.FloatField(null=True, blank=True)      # SUPERF (ha)
     perimetre_parcelle  = models.FloatField(null=True, blank=True)      # PERIM (m)
     ocs                 = models.CharField(max_length=100, blank=True)  # Occupation du sol
     nom_ota             = models.CharField(max_length=100, blank=True)  # Opérateur agréé
     n_demcge            = models.CharField(max_length=50,  blank=True)  # N° demande CGE
+    nom_ce              = models.CharField(max_length=150, blank=True)  # NOM DE CE (contrôleur/évaluateur)
+    observation         = models.TextField(blank=True)                 # OBSERVATION
     boucle              = models.CharField(max_length=50,  blank=True)
     cd_sp_vil           = models.CharField(max_length=50,  blank=True)
     clas_preci          = models.CharField(max_length=10,  blank=True)
     point_ratt          = models.CharField(max_length=100, blank=True)
     statut_cf           = models.CharField(
         max_length=20, choices=STATUT_CF_CHOICES,
+        null=True, blank=True,
+    )
+    statut_publicite    = models.CharField(
+        max_length=20, choices=STATUT_PUBLICITE_CHOICES,
         null=True, blank=True,
     )
 

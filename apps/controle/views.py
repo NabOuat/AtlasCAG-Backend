@@ -1,7 +1,8 @@
-from rest_framework import viewsets, permissions
+from rest_framework import viewsets, permissions, serializers
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from django.db.models import Count, Q
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter
 from .models import ControleQualite, AnomalieControle, EnvoiEntreprise
 from .serializers import ControleListSerializer, ControleDetailSerializer, EnvoiSerializer
@@ -172,7 +173,25 @@ class EnvoiViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
-        serializer.save(envoye_par=self.request.user)
+        dossier    = serializer.validated_data['dossier']
+        plateforme = serializer.validated_data['plateforme']
+        # Anti-doublon serveur — ne jamais se fier uniquement au frontend (qui ne fait que
+        # désactiver la case à cocher) : un même dossier ne doit pas pouvoir être envoyé deux
+        # fois vers la même plateforme, quel que soit le client à l'origine de la requête.
+        if EnvoiEntreprise.objects.filter(dossier=dossier, plateforme=plateforme).exists():
+            raise serializers.ValidationError(
+                {'detail': f"Ce dossier a déjà été envoyé vers {plateforme} — envoi refusé pour éviter un doublon."}
+            )
+        extra = {'envoye_par': self.request.user}
+        # Il n'existe aujourd'hui aucune intégration externe asynchrone avec Digifor/SCCARTO/SIFOR :
+        # la création de cet enregistrement EST l'opération d'envoi (pas une simple mise en file
+        # d'attente). Statut et date par défaut reflètent donc un envoi immédiatement effectif,
+        # sauf si l'appelant fournit explicitement une autre valeur (ex. réconciliation manuelle).
+        if 'statut' not in self.request.data:
+            extra['statut'] = 'ENVOYE'
+        if 'envoye_le' not in self.request.data:
+            extra['envoye_le'] = timezone.now()
+        serializer.save(**extra)
 
 
 # ── Contrôle Qualité — endpoints QC ────────────────────────────────────────

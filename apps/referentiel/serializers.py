@@ -19,7 +19,7 @@ class DepartementSerializer(serializers.ModelSerializer):
 
     class Meta:
         model  = Departement
-        fields = ['id', 'nom', 'region', 'region_nom']
+        fields = ['id', 'nom', 'code', 'region', 'region_nom']
 
 
 class SousPrefectureSerializer(serializers.ModelSerializer):
@@ -27,7 +27,7 @@ class SousPrefectureSerializer(serializers.ModelSerializer):
 
     class Meta:
         model  = SousPrefecture
-        fields = ['id', 'nom', 'departement', 'departement_nom']
+        fields = ['id', 'nom', 'code', 'departement', 'departement_nom']
 
 
 class VillageWriteSerializer(serializers.ModelSerializer):
@@ -37,7 +37,7 @@ class VillageWriteSerializer(serializers.ModelSerializer):
 
     class Meta:
         model  = Village
-        fields = ['id', 'nom', 'sous_prefecture', 'sous_prefecture_fk', 'zone', 'latitude', 'longitude']
+        fields = ['id', 'nom', 'code', 'sous_prefecture', 'sous_prefecture_fk', 'zone', 'latitude', 'longitude']
 
 
 class VillageListSerializer(serializers.ModelSerializer):
@@ -61,7 +61,7 @@ class VillageListSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Village
         fields = [
-            'id', 'nom', 'zone', 'zone_nom', 'sous_prefecture', 'sous_prefecture_nom',
+            'id', 'nom', 'code', 'zone', 'zone_nom', 'sous_prefecture', 'sous_prefecture_nom',
             'latitude', 'longitude',
             'recueil_historique_fait', 'layons_identifies', 'pv_constat_signes',
             'delimite', 'publicite_ouverte', 'publicite_cloturee', 'approuve', 'valide',

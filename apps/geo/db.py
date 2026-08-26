@@ -15,6 +15,13 @@ SKIP_SCHEMAS = frozenset({
     'admin', 'test', 'test_29n', 'test_30n',
 })
 
+# CRS source RGCI_TM_5_5_NW — BNETD/IGT Côte d'Ivoire, pas de code EPSG officiel.
+# Utilisé pour les tables dont le SRID n'est pas déclaré (ST_SRID(geom) = 0).
+PROJ_RGCI = (
+    '+proj=tmerc +lat_0=0 +lon_0=-5.5 +k=0.9996 '
+    '+x_0=500000 +y_0=0 +ellps=WGS84 +datum=WGS84 +units=m +no_defs'
+)
+
 
 def db_alias(zone: str) -> str:
     return f'{zone}_spatial'

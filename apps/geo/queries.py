@@ -6,7 +6,7 @@ Réutilisé par les endpoints de listing (`geo_cf_parcelles`, `geo_dtv_villages`
 `geo_resume`) pour éviter de dupliquer la logique de filtrage à chaque endpoint.
 """
 
-from .db import discover_schema_tables, table_exists, non_geom_columns
+from .db import discover_schema_tables, table_exists, non_geom_columns, get_table_srid, PROJ_RGCI
 
 # Tables dans le schéma public uniquement
 SOUS_PREFECTURE_TABLES = ['Sous_prefecture']
@@ -235,6 +235,66 @@ def sort_results(results: list[dict], ordering: str | None, columns: list[str]) 
     return sorted(results, key=_key, reverse=reverse)
 
 
+# Superficie (ha) au-delà de laquelle une valeur individuelle SUPERF est jugée
+# invraisemblable pour une parcelle CF ou un village DTV. Choisie très au-dessus des plus
+# grandes valeurs correctes observées (~18 450 ha) et très en dessous des plus petites
+# valeurs corrompues observées (~81 590 ha, cf. CF_Existants Cavally / Villages_delimites
+# Worodougou saisis en m² au lieu de ha) — large marge des deux côtés.
+_SANITY_MAX_HA = 50_000
+
+
+def _raw_superficie_ha_sql() -> str:
+    """Cast prudent de la colonne SUPERF vers numeric : certaines tables la stockent en
+    texte (ex. Villages_delimites), avec parfois des cellules vides/non numériques."""
+    return (
+        f'CASE WHEN "{SUPERFICIE_COL}"::text ~ \'^[0-9]+\\.?[0-9]*$\' '
+        f'THEN "{SUPERFICIE_COL}"::text::numeric ELSE NULL END'
+    )
+
+
+def _geom_superficie_ha_sql(cursor, schema: str, table: str) -> tuple[str, list]:
+    """Superficie (ha) calculée depuis la géométrie — sert uniquement de garde-fou pour
+    détecter/corriger une valeur SUPERF invraisemblable (cf. _corrected_superficie_sql)."""
+    srid = get_table_srid(cursor, schema, table)
+    if srid == 0:
+        return "ST_Area(ST_Transform(ST_MakeValid(geom), %s, 'EPSG:4326')::geography) / 10000", [PROJ_RGCI]
+    return "ST_Area(ST_Transform(ST_MakeValid(geom), 4326)::geography) / 10000", []
+
+
+def _corrected_superficie_sql(cursor, schema: str, table: str, where_sql: str) -> tuple[str, list]:
+    """SUM(superficie ha) avec garde-fou géométrique.
+
+    La colonne attributaire SUPERF est censée déjà être en hectares (BNETD/IGT) et reste
+    la source de vérité (pas de calcul géométrique ST_Area par défaut — cohérent avec le
+    cahier des charges). Mais certaines tables contiennent des valeurs saisies en m² au
+    lieu de ha (facteur ~10 000, ex. Villages_delimites) ou carrément incohérentes
+    (ex. CF_Existants Cavally).
+
+    Le calcul géométrique (ST_Transform/ST_Area) est coûteux sur ces bases distantes : le
+    seuil `_SANITY_MAX_HA` est la première branche du CASE, donc Postgres n'évalue le
+    calcul géométrique que pour les rares lignes qui le dépassent — l'immense majorité des
+    lignes, déjà cohérentes, ne paient jamais ce coût."""
+    geom_ha_sql, geom_params = _geom_superficie_ha_sql(cursor, schema, table)
+    raw_ha_sql = _raw_superficie_ha_sql()
+    sql = (
+        f'SELECT COUNT(*), SUM('
+        f'  CASE '
+        f'    WHEN raw_ha IS NOT NULL AND raw_ha > 0 AND raw_ha <= {_SANITY_MAX_HA} THEN raw_ha '
+        f'    WHEN raw_ha IS NOT NULL AND raw_ha / NULLIF({geom_ha_sql}, 0) BETWEEN 9000 AND 11000 '
+        f'      THEN raw_ha / 10000 '
+        f'    ELSE COALESCE({geom_ha_sql}, raw_ha, 0) '
+        f'  END'
+        f') '
+        f'FROM ('
+        f'  SELECT ({raw_ha_sql}) AS raw_ha, geom '
+        f'  FROM "{schema}"."{table}" WHERE {where_sql}'
+        f') sub'
+    )
+    # geom_ha_sql apparaît deux fois (test du ratio + repli COALESCE) : dupliquer ses
+    # paramètres (ex. PROJ_RGCI) dans le même ordre que leur apparition dans le texte SQL.
+    return sql, geom_params + geom_params
+
+
 def compute_stats(
     cursor,
     schema_tables: list[tuple[str, str]],
@@ -245,26 +305,28 @@ def compute_stats(
     superficie_max: float | None = None,
     search: str | None = None,
 ) -> dict[str, dict]:
-    """Compteurs + superficie totale (ha) par statut, en sommant la colonne attributaire
-    SUPERF (pas de calcul géométrique ST_Area — cohérent avec des données directement
-    issues de la table attributaire, comme demandé par le cahier des charges)."""
+    """Compteurs + superficie totale (ha) par statut, à partir de la colonne attributaire
+    SUPERF (source de vérité), avec correction des valeurs invraisemblables détectées par
+    comparaison géométrique — cf. _corrected_superficie_sql."""
     stats: dict[str, dict] = {}
     for schema, table in schema_tables:
         statut = table_statut(table)
         avail = non_geom_columns(cursor, schema, table)
         if not avail:
             continue
-        where_sql, params = build_where(
+        where_sql, where_params = build_where(
             avail, exact_filters,
             superficie_eq=superficie_eq, superficie_min=superficie_min,
             superficie_max=superficie_max, search=search,
         )
-        superficie_expr = f'SUM("{SUPERFICIE_COL}")' if SUPERFICIE_COL in avail else 'NULL'
+        if SUPERFICIE_COL in avail:
+            sql, geom_params = _corrected_superficie_sql(cursor, schema, table, where_sql)
+            params = geom_params + where_params
+        else:
+            sql = f'SELECT COUNT(*), NULL FROM "{schema}"."{table}" WHERE {where_sql}'
+            params = where_params
         try:
-            cursor.execute(
-                f'SELECT COUNT(*), {superficie_expr} FROM "{schema}"."{table}" WHERE {where_sql}',
-                params,
-            )
+            cursor.execute(sql, params)
             count, superficie = cursor.fetchone()
         except Exception:
             continue
