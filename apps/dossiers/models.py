@@ -52,6 +52,18 @@ class Dossier(models.Model):
         ('VALIDE',           'Validée'),
         ('REJETE',           'Rejeté'),
     ]
+    # Avancement administratif du workflow de publicité (le STATUT). Distinct de statut_cf (la
+    # COUCHE PostGIS où vit réellement la géométrie) : les deux sont synchronisés à chaque
+    # transition (apps.publicite.services.migrer_parcelle), mais peuvent diverger temporairement
+    # — un import Excel fait passer statut_publicite à EN_PUBLICITE immédiatement, alors que
+    # statut_cf ne change qu'au déclenchement effectif de la migration spatiale (bouton
+    # « Mettre en publicité »). Cf. LOGIQUE_METIER_PUBLICITE.pdf §1.
+    STATUT_PUBLICITE_CHOICES = [
+        ('EN_PUBLICITE', 'En publicité'),
+        ('APPROUVE',     'Approuvée'),
+        ('REJETE',       'Rejetée'),
+        ('VALIDE',       'Validée'),
+    ]
 
     # ── Identité ──────────────────────────────────────────
     numero_dossier = models.CharField(max_length=50, unique=True, db_index=True)
@@ -86,6 +98,13 @@ class Dossier(models.Model):
         max_length=20, choices=STATUT_CF_CHOICES,
         null=True, blank=True,
     )
+    statut_publicite    = models.CharField(
+        max_length=20, choices=STATUT_PUBLICITE_CHOICES,
+        null=True, blank=True,
+    )
+    numero_parcelle     = models.CharField(max_length=50,  blank=True)  # distingue plusieurs parcelles d'une même demande
+    nom_ce              = models.CharField(max_length=150, blank=True)  # Commissaire-Enquêteur
+    observation         = models.TextField(blank=True)
 
     class Meta:
         db_table = 'dossier'

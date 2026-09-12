@@ -70,8 +70,9 @@ class SuiviCFSerializer(serializers.ModelSerializer):
         model  = Dossier
         fields = [
             'id', 'numero_dossier', 'village', 'village_nom', 'zone', 'zone_nom',
-            'statut', 'statut_cf', 'vague_envoi', 'vague_envoi_nom',
-            'num_demand', 'nom_demandeur', 'superficie_parcelle', 'perimetre_parcelle',
+            'statut', 'statut_cf', 'statut_publicite', 'vague_envoi', 'vague_envoi_nom',
+            'num_demand', 'nom_demandeur', 'numero_parcelle', 'nom_ce', 'observation',
+            'superficie_parcelle', 'perimetre_parcelle',
             'nom_ota', 'n_demcge', 'cree_le', 'modifie_le', 'cree_par', 'cree_par_nom',
         ]
 
@@ -85,7 +86,7 @@ class SuiviCFCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Dossier
         fields = [
-            'numero_dossier', 'village', 'zone', 'statut', 'statut_cf', 'vague_envoi',
-            'num_demand', 'nom_demandeur', 'superficie_parcelle', 'perimetre_parcelle',
-            'nom_ota', 'n_demcge',
+            'numero_dossier', 'village', 'zone', 'statut', 'statut_cf', 'statut_publicite',
+            'vague_envoi', 'num_demand', 'nom_demandeur', 'numero_parcelle', 'nom_ce',
+            'observation', 'superficie_parcelle', 'perimetre_parcelle', 'nom_ota', 'n_demcge',
         ]

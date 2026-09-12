@@ -28,9 +28,10 @@ TRANSITION_RESPONSE = {
     200: {
         'type': 'object',
         'properties': {
-            'id':             {'type': 'integer'},
-            'numero_dossier': {'type': 'string'},
-            'statut_cf':      {'type': 'string'},
+            'id':               {'type': 'integer'},
+            'numero_dossier':   {'type': 'string'},
+            'statut_cf':        {'type': 'string'},
+            'statut_publicite': {'type': 'string'},
         },
     },
     400: {'description': 'Précondition de statut non respectée, num_demand manquant ou zone non reconnue'},
@@ -45,10 +46,11 @@ class _TransitionView(APIView):
     spatiale + mise à jour métier au service `migrer_parcelle`."""
 
     permission_classes = [IsAuthenticated]
-    statut_attendu: str
+    statuts_attendus: tuple  # valeurs de statut_cf acceptées en entrée de la transition
     table_source: str
     table_cible: str
     nouveau_statut: str
+    deplacer: bool = True  # False uniquement pour Définitif → En publicité (copie, cf. §5.2)
 
     def post(self, request, dossier_id):
         try:
@@ -56,11 +58,11 @@ class _TransitionView(APIView):
         except Dossier.DoesNotExist:
             return Response({'detail': 'Dossier introuvable.'}, status=status.HTTP_404_NOT_FOUND)
 
-        if dossier.statut_cf != self.statut_attendu:
+        if dossier.statut_cf not in self.statuts_attendus:
             return Response(
                 {'detail': (
                     f"Transition impossible : statut_cf actuel = {dossier.statut_cf!r}, "
-                    f"attendu {self.statut_attendu!r}."
+                    f"attendu parmi {self.statuts_attendus!r}."
                 )},
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -79,14 +81,16 @@ class _TransitionView(APIView):
                 zone=zone, dossier=dossier,
                 table_source=self.table_source, table_cible=self.table_cible,
                 nouveau_statut=self.nouveau_statut, user=request.user,
+                deplacer=self.deplacer,
             )
         except MigrationError as exc:
             return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
         return Response({
-            'id':             dossier.id,
-            'numero_dossier': dossier.numero_dossier,
-            'statut_cf':      dossier.statut_cf,
+            'id':                dossier.id,
+            'numero_dossier':    dossier.numero_dossier,
+            'statut_cf':         dossier.statut_cf,
+            'statut_publicite':  dossier.statut_publicite,
         })
 
 
@@ -94,69 +98,74 @@ class _TransitionView(APIView):
     tags=['Publicité'],
     summary='Mettre un dossier CF en publicité',
     description=(
-        'Requiert `statut_cf == DEF`. Migre la parcelle (identifiée par `NUM_DEMAND`) de la '
-        'couche **CF – Définitif** vers **CF – En publicité**, puis passe `statut_cf` à '
-        '`EN_PUBLICITE`.'
+        'Requiert `statut_cf` vide (dossier fraîchement importé, jamais engagé dans le circuit) '
+        'ou `DEF`. Copie la parcelle (identifiée par `NUM_DEMAND`) de la couche **CF – Définitif** '
+        'vers **CF – En publicité** — seule transition qui copie au lieu de déplacer : la ligne '
+        'reste dans `cf_poly_parcelle_Def`, qui demeure le registre permanent de toutes les '
+        'parcelles jamais levées. Passe `statut_cf` et `statut_publicite` à `EN_PUBLICITE`.'
     ),
     request=None,
     responses=TRANSITION_RESPONSE,
 )
 class MettreEnPubliciteView(_TransitionView):
-    statut_attendu = 'DEF'
-    table_source   = CF_DEF_TABLE
-    table_cible    = CF_EN_PUBLICITE_TABLE
-    nouveau_statut = 'EN_PUBLICITE'
+    statuts_attendus = (None, '', 'DEF')
+    table_source     = CF_DEF_TABLE
+    table_cible      = CF_EN_PUBLICITE_TABLE
+    nouveau_statut   = 'EN_PUBLICITE'
+    deplacer         = False
 
 
 @extend_schema(
     tags=['Publicité'],
     summary='Approuver un dossier CF en publicité',
     description=(
-        'Requiert `statut_cf == EN_PUBLICITE`. Migre la parcelle de **CF – En publicité** '
-        'vers **CF – Approuvée**, puis passe `statut_cf` à `APPROUVE`.'
+        'Requiert `statut_cf == EN_PUBLICITE`. Déplace la parcelle de **CF – En publicité** '
+        'vers **CF – Approuvée**, puis passe `statut_cf`/`statut_publicite` à `APPROUVE`.'
     ),
     request=None,
     responses=TRANSITION_RESPONSE,
 )
 class ApprouverView(_TransitionView):
-    statut_attendu = 'EN_PUBLICITE'
-    table_source   = CF_EN_PUBLICITE_TABLE
-    table_cible    = CF_APPROUVEE_TABLE
-    nouveau_statut = 'APPROUVE'
+    statuts_attendus = ('EN_PUBLICITE',)
+    table_source     = CF_EN_PUBLICITE_TABLE
+    table_cible      = CF_APPROUVEE_TABLE
+    nouveau_statut   = 'APPROUVE'
 
 
 @extend_schema(
     tags=['Publicité'],
     summary='Rejeter un dossier CF en publicité',
     description=(
-        'Requiert `statut_cf == EN_PUBLICITE`. Migre la parcelle de **CF – En publicité** '
-        'vers **CF – Rejetée**, puis passe `statut_cf` à `REJETE`.'
+        'Requiert `statut_cf == EN_PUBLICITE`. Déplace la parcelle de **CF – En publicité** '
+        'vers **CF – Rejetée**, puis passe `statut_cf`/`statut_publicite` à `REJETE`. Chemin '
+        'sans retour — état final.'
     ),
     request=None,
     responses=TRANSITION_RESPONSE,
 )
 class RejeterView(_TransitionView):
-    statut_attendu = 'EN_PUBLICITE'
-    table_source   = CF_EN_PUBLICITE_TABLE
-    table_cible    = CF_REJETEE_TABLE
-    nouveau_statut = 'REJETE'
+    statuts_attendus = ('EN_PUBLICITE',)
+    table_source     = CF_EN_PUBLICITE_TABLE
+    table_cible      = CF_REJETEE_TABLE
+    nouveau_statut   = 'REJETE'
 
 
 @extend_schema(
     tags=['Publicité'],
     summary='Valider un dossier CF approuvé',
     description=(
-        'Requiert `statut_cf == APPROUVE`. Migre la parcelle de **CF – Approuvée** vers '
-        '**CF – Validée** (état final du workflow), puis passe `statut_cf` à `VALIDE`.'
+        'Requiert `statut_cf == APPROUVE`. Déplace la parcelle de **CF – Approuvée** vers '
+        '**CF – Validée** (état final du workflow), puis passe `statut_cf`/`statut_publicite` '
+        'à `VALIDE`.'
     ),
     request=None,
     responses=TRANSITION_RESPONSE,
 )
 class ValiderView(_TransitionView):
-    statut_attendu = 'APPROUVE'
-    table_source   = CF_APPROUVEE_TABLE
-    table_cible    = CF_VALIDEE_TABLE
-    nouveau_statut = 'VALIDE'
+    statuts_attendus = ('APPROUVE',)
+    table_source     = CF_APPROUVEE_TABLE
+    table_cible      = CF_VALIDEE_TABLE
+    nouveau_statut   = 'VALIDE'
 
 
 @extend_schema(

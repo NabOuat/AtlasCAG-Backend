@@ -79,10 +79,15 @@ def _resolve_target_schema(cursor, source_schema, table_cible, avail_cols, row):
     )
 
 
-def migrer_parcelle(*, zone, dossier, table_source, table_cible, nouveau_statut, user):
+def migrer_parcelle(*, zone, dossier, table_source, table_cible, nouveau_statut, user, deplacer=True):
     """Migre la parcelle `dossier.num_demand` de `table_source` vers `table_cible` sur la
-    base spatiale de `zone`, puis met à jour `dossier.statut_cf`. Lève `MigrationError`
-    sans modifier `dossier` si la migration spatiale échoue."""
+    base spatiale de `zone`, puis met à jour `dossier.statut_cf`/`statut_publicite`. Lève
+    `MigrationError` sans modifier `dossier` si la migration spatiale échoue.
+
+    `deplacer=False` (utilisé uniquement pour Définitif → En publicité, cf.
+    LOGIQUE_METIER_PUBLICITE.pdf §5.2) : la ligne est copiée dans la couche cible sans être
+    supprimée de la source — `cf_poly_parcelle_Def` reste ainsi le registre permanent de
+    toutes les parcelles jamais levées."""
     num_demand    = dossier.num_demand
     ancien_statut = dossier.statut_cf
     alias         = db_alias(zone)
@@ -108,10 +113,11 @@ def migrer_parcelle(*, zone, dossier, table_source, table_cible, nouveau_statut,
                         f"'create_publicite_layers' avant d'utiliser ce workflow."
                     )
 
-                cursor.execute(
-                    f'DELETE FROM "{schema}"."{table_source}" WHERE "NUM_DEMAND" = %s',
-                    [num_demand],
-                )
+                if deplacer:
+                    cursor.execute(
+                        f'DELETE FROM "{schema}"."{table_source}" WHERE "NUM_DEMAND" = %s',
+                        [num_demand],
+                    )
                 insert_cols = avail + ['geom']
                 col_sql      = ', '.join(f'"{c}"' for c in insert_cols)
                 placeholders = ', '.join(['%s'] * len(insert_cols))
@@ -131,7 +137,8 @@ def migrer_parcelle(*, zone, dossier, table_source, table_cible, nouveau_statut,
     try:
         with transaction.atomic():
             dossier.statut_cf = nouveau_statut
-            dossier.save(update_fields=['statut_cf'])
+            dossier.statut_publicite = nouveau_statut
+            dossier.save(update_fields=['statut_cf', 'statut_publicite'])
             HistoriqueMigrationCouche.objects.create(
                 dossier=dossier, num_demand=num_demand,
                 ancien_statut=ancien_statut, nouveau_statut=nouveau_statut,

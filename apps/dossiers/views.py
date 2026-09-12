@@ -178,6 +178,8 @@ class VagueEnvoiViewSet(viewsets.ModelViewSet):
             OpenApiParameter('statut',      description='`EN_COURS`, `VALIDE`, `REJETE`, `ARCHIVE`, `ANNULE`', required=False),
             OpenApiParameter('statut_cf',   description='`LEVE`, `PROV`, `EN_PUBLICITE`, `DEF`, `APPROUVE`, `VALIDE`, `REJETE`', required=False),
             OpenApiParameter('vague_envoi', description='ID de la vague d\'envoi', required=False),
+            OpenApiParameter('en_publicite', description='`true` → uniquement les dossiers rattachés à une vague d\'envoi', required=False),
+            OpenApiParameter('avec_resultat_qc', description='`true` → uniquement les dossiers dont le dernier contrôle qualité a conclu Validé ou Rejeté', required=False),
             OpenApiParameter('search',      description='Recherche par numéro de dossier, village, demandeur ou num_demand', required=False),
         ],
     ),
@@ -197,15 +199,21 @@ class SuiviCFViewSet(viewsets.ModelViewSet):
             .select_related('village', 'zone', 'vague_envoi', 'cree_par')
             .order_by('-cree_le')
         )
-        zone        = self.request.query_params.get('zone')
-        statut      = self.request.query_params.get('statut')
-        statut_cf   = self.request.query_params.get('statut_cf')
-        vague_envoi = self.request.query_params.get('vague_envoi')
-        search      = self.request.query_params.get('search')
+        zone             = self.request.query_params.get('zone')
+        statut           = self.request.query_params.get('statut')
+        statut_cf        = self.request.query_params.get('statut_cf')
+        vague_envoi      = self.request.query_params.get('vague_envoi')
+        en_publicite     = self.request.query_params.get('en_publicite')
+        avec_resultat_qc = self.request.query_params.get('avec_resultat_qc')
+        search           = self.request.query_params.get('search')
         if zone:        qs = qs.filter(zone__id=zone)
         if statut:      qs = qs.filter(statut=statut)
         if statut_cf:   qs = qs.filter(statut_cf=statut_cf)
         if vague_envoi: qs = qs.filter(vague_envoi__id=vague_envoi)
+        if str(en_publicite).lower() in ('true', '1'):
+            qs = qs.filter(vague_envoi__isnull=False)
+        if str(avec_resultat_qc).lower() in ('true', '1'):
+            qs = qs.filter(controles__statut__in=['VALIDE', 'REJETE']).distinct()
         if search:
             qs = qs.filter(
                 Q(numero_dossier__icontains=search) | Q(village__nom__icontains=search)

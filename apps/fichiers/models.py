@@ -39,14 +39,29 @@ class FichierDossier(models.Model):
 
 
 class FichierExcelPublicite(models.Model):
-    """Fichier Excel de la liste des parcelles envoyées en publicité."""
-    village     = models.ForeignKey(
+    """Fichier Excel de la liste des parcelles envoyées en publicité — point d'entrée du
+    workflow de publicité. À l'import, chaque ligne est upsertée en `Dossier` (cf.
+    apps.fichiers.services.importer_excel_publicite) ; les champs ci-dessous conservent le
+    résultat calculé de ce traitement pour affichage/audit ultérieur."""
+    village      = models.ForeignKey(
         'referentiel.Village', on_delete=models.CASCADE, related_name='excels_publicite',
+    )
+    vague_envoi  = models.ForeignKey(
+        'dossiers.VagueEnvoi', null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='excels_publicite',
     )
     nom         = models.CharField(max_length=255)
     fichier     = models.FileField(upload_to=upload_excel_to)
     taille      = models.PositiveIntegerField(null=True, blank=True)
     description = models.TextField(blank=True)
+
+    # ── Résultat calculé de l'import (cf. LOGIQUE_METIER_PUBLICITE.pdf §3.4) ──────────
+    nb_parcelles      = models.PositiveIntegerField(default=0)
+    nb_crees          = models.PositiveIntegerField(default=0)
+    nb_maj            = models.PositiveIntegerField(default=0)
+    superficie_totale = models.FloatField(null=True, blank=True)
+    erreurs           = models.JSONField(default=list, blank=True)
+
     televerse_par = models.ForeignKey(
         'accounts.Utilisateur', null=True, blank=True,
         on_delete=models.SET_NULL, related_name='excels_televerses',
