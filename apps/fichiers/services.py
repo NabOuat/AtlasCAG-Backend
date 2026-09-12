@@ -17,6 +17,8 @@ Ce que cet import ne fait jamais :
 import io
 import re
 
+from django.db import transaction
+
 STATUT_PUBLICITE_INITIAL = 'EN_PUBLICITE'
 
 # Alias de colonnes tolérés (en-têtes comparés en majuscules/strippés, espaces->underscore)
@@ -141,24 +143,28 @@ def importer_excel_publicite(*, fichier, village, vague_envoi, user) -> dict:
         if numero_parcelle: defaults['numero_parcelle'] = numero_parcelle
 
         try:
-            dossier = Dossier.objects.filter(numero_dossier=numero_dossier).first()
-            if dossier:
-                for k, v in defaults.items():
-                    setattr(dossier, k, v)
-                dossier.vague_envoi = vague_envoi
-                # Ne jamais rembobiner une progression déjà entamée (Approuvée/Rejetée/Validée).
-                if not dossier.statut_publicite:
-                    dossier.statut_publicite = STATUT_PUBLICITE_INITIAL
-                dossier.save()
-                nb_maj += 1
-            else:
-                Dossier.objects.create(
-                    numero_dossier=numero_dossier, num_demand=num_demand,
-                    village=village, zone=village.zone, type_dossier='CF',
-                    vague_envoi=vague_envoi, statut_publicite=STATUT_PUBLICITE_INITIAL,
-                    cree_par=user, **defaults,
-                )
-                nb_crees += 1
+            # Chaque ligne dans sa propre transaction : une erreur SQL sur cette ligne (contrainte
+            # violée, etc.) ne doit jamais casser la transaction Postgres pour les lignes
+            # suivantes (sans ça, toute la fin de l'import échouerait en cascade — cf. §3.4).
+            with transaction.atomic():
+                dossier = Dossier.objects.filter(numero_dossier=numero_dossier).first()
+                if dossier:
+                    for k, v in defaults.items():
+                        setattr(dossier, k, v)
+                    dossier.vague_envoi = vague_envoi
+                    # Ne jamais rembobiner une progression déjà entamée (Approuvée/Rejetée/Validée).
+                    if not dossier.statut_publicite:
+                        dossier.statut_publicite = STATUT_PUBLICITE_INITIAL
+                    dossier.save()
+                    nb_maj += 1
+                else:
+                    Dossier.objects.create(
+                        numero_dossier=numero_dossier, num_demand=num_demand,
+                        village=village, zone=village.zone, type_dossier='CF',
+                        vague_envoi=vague_envoi, statut_publicite=STATUT_PUBLICITE_INITIAL,
+                        cree_par=user, **defaults,
+                    )
+                    nb_crees += 1
         except Exception as exc:
             erreurs.append({'row': idx, 'message': str(exc)})
             continue

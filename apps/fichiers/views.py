@@ -189,7 +189,14 @@ class ExcelPubliciteViewSet(viewsets.ModelViewSet):
 
         if not isinstance(village, Village):
             return Response({'detail': 'village invalide.'}, status=status.HTTP_400_BAD_REQUEST)
-        if vague_envoi is not None and not isinstance(vague_envoi, VagueEnvoi):
+        # vague_envoi est nullable au niveau du modèle (un enregistrement FichierExcelPublicite
+        # peut exister sans vague dans d'autres contextes), mais obligatoire pour cette action
+        # d'import (cf. LOGIQUE_METIER_PUBLICITE.pdf §3.1, « Vague de publicité * ») — sans ce
+        # contrôle, une requête l'omettant écraserait silencieusement à None la vague déjà
+        # rattachée à un dossier existant lors d'une mise à jour.
+        if vague_envoi is None:
+            return Response({'detail': 'vague_envoi requis.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not isinstance(vague_envoi, VagueEnvoi):
             return Response({'detail': 'vague_envoi invalide.'}, status=status.HTTP_400_BAD_REQUEST)
         if not fichier:
             return Response({'detail': 'fichier requis.'}, status=status.HTTP_400_BAD_REQUEST)

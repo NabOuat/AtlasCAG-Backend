@@ -113,6 +113,24 @@ def migrer_parcelle(*, zone, dossier, table_source, table_cible, nouveau_statut,
                         f"'create_publicite_layers' avant d'utiliser ce workflow."
                     )
 
+                # Garde-fou anti-doublon : nécessaire surtout pour deplacer=False (copie plutôt
+                # que déplacement), où une nouvelle tentative après un échec résiduel (migration
+                # spatiale déjà réussie mais mise à jour du dossier restée en échec, cf. §5.3 du
+                # cahier des charges) retrouverait la ligne encore présente dans la source et
+                # tenterait de la réinsérer une deuxième fois dans la cible sans jamais l'avoir
+                # supprimée de la source. Sans ce contrôle, ça produirait une parcelle dupliquée
+                # (ou une erreur de contrainte opaque) plutôt qu'un message clair de réconciliation.
+                cursor.execute(
+                    f'SELECT 1 FROM "{target_schema}"."{table_cible}" WHERE "NUM_DEMAND" = %s',
+                    [num_demand],
+                )
+                if cursor.fetchone():
+                    raise MigrationError(
+                        f"Parcelle NUM_DEMAND={num_demand!r} déjà présente dans la couche cible "
+                        f"{couche_cible} — probable réconciliation manuelle nécessaire "
+                        f"(vérifier l'historique des migrations)."
+                    )
+
                 if deplacer:
                     cursor.execute(
                         f'DELETE FROM "{schema}"."{table_source}" WHERE "NUM_DEMAND" = %s',
